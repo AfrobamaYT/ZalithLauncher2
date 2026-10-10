@@ -1442,4 +1442,10 @@
     <string name="versions_modify_diff_install">Instalar %1$s %2$s</string>
     <string name="versions_modify_success">Versão modificada com sucesso!</string>
     <string name="versions_modify_error_message">Ocorreu um erro ao modificar a versão:</string>
+    <string name="account_wardrobe">Guarda-roupa</string>
+    <string name="home_server_card_settings">Configurações da placa de servidor</string>
+    <string name="home_server_card_quick_launch">Botão de inicialização rápida</string>
+    <string name="home_server_card_version_current">Versão selecionada atual</string>
+    <string name="home_server_card_version_specific">Versão específica</string>
+    <string name="home_server_card_refresh_failed">Falha ao atualizar as informações do servidor</string>
 </resources>
