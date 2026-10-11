@@ -1425,4 +1425,6 @@
     <string name="cape_name_twisted">Twisted</string>
     <string name="cape_name_hero">Hero</string>
     <string name="cape_name_aurora">Aurora</string>
+    <string name="game_menu_option_fps_display_mode_number">Angka</string>
+    <string name="versions_modify_select_mc">Pilih versi Minecraft</string>
 </resources>
