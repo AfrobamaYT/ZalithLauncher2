@@ -722,7 +722,7 @@ private fun AccountSkinOperation(
             val account = accountSkinOperation.account
             ChangeSkinDialog(
                 account = account,
-                availableCapes = accountCapes[account.uniqueUUID] ?: emptyList(),
+                availableCapes = accountCapes[account.uniqueUUID],
                 skinState = skinDialogState.pendingSkinData,
                 onSkinStateChange = { skinState ->
                     actions.onIntent(
