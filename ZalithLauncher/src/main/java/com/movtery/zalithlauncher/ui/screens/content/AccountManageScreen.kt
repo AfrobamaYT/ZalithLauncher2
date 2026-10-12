@@ -285,17 +285,20 @@ private fun ActionsLayout(
     ) {
         //玩家模型预览
         val refreshWardrobe by AccountsManager.refreshWardrobe.collectAsStateWithLifecycle()
+        val skinFile = remember(currentAccount, refreshWardrobe) {
+            currentAccount?.getSkinFile()?.takeIf { it.exists() }
+        }
+        val capeFile = remember(currentAccount, refreshWardrobe) {
+            currentAccount?.getCapeFile()?.takeIf { it.exists() }
+        }
         SkinPreview3D(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            skinFile = remember(currentAccount, refreshWardrobe) {
-                currentAccount?.getSkinFile()?.takeIf { it.exists() }
-            },
-            capeFile = remember(currentAccount, refreshWardrobe) {
-                currentAccount?.getCapeFile()?.takeIf { it.exists() }
-            },
-            modelType = currentAccount?.skinModelType
+            skinFile = skinFile,
+            capeFile = capeFile,
+            modelType = currentAccount?.skinModelType,
+            refreshKey = listOf(currentAccount?.uniqueUUID, refreshWardrobe, skinFile?.lastModified() ?: 0L, capeFile?.lastModified() ?: 0L)
         )
 
         //添加账号

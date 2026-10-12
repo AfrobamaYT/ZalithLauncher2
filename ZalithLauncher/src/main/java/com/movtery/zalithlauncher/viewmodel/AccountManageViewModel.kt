@@ -50,6 +50,7 @@ import com.movtery.zalithlauncher.game.account.yggdrasil.PlayerProfile
 import com.movtery.zalithlauncher.game.account.yggdrasil.cacheAllCapes
 import com.movtery.zalithlauncher.game.account.yggdrasil.changeCape
 import com.movtery.zalithlauncher.game.account.yggdrasil.executeWithAuthorization
+import com.movtery.zalithlauncher.game.account.yggdrasil.findUsing
 import com.movtery.zalithlauncher.game.account.yggdrasil.getFile
 import com.movtery.zalithlauncher.game.account.yggdrasil.getPlayerProfile
 import com.movtery.zalithlauncher.game.account.yggdrasil.uploadSkin
@@ -569,8 +570,25 @@ class AccountManageViewModel @AssistedInject constructor(
                         task.updateMessage(androidText(R.string.account_change_cape_cache_all))
                         cacheAllCapes(profile)
                         //同时更新本地的皮肤/披风
-                        account.downloadYggdrasil()
+                        runCatching {
+                            account.downloadYggdrasil()
+                        }
+
+                        val activeCape = profile.capes.findUsing()
+                        val targetCape = account.getCapeFile()
+                        if (activeCape != null) {
+                            val activeCapeFile = activeCape.getFile(PathManager.DIR_ACCOUNT_CAPE)
+                            if (activeCapeFile.exists()) {
+                                runCatching {
+                                    activeCapeFile.copyTo(targetCape, overwrite = true)
+                                }
+                            }
+                        } else {
+                            FileUtils.deleteQuietly(targetCape)
+                        }
+
                         _accountCapeOpMap.update { it + (account.uniqueUUID to profile.capes) }
+                        AccountsManager.refreshWardrobe()
                     }, onRefreshRequest = {
                         account.refreshMicrosoft(task = task, coroutineContext = coroutineContext)
                         AccountsManager.suspendSaveAccount(account)
