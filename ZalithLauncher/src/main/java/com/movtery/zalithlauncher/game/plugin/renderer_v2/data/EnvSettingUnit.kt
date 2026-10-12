@@ -31,15 +31,16 @@ sealed class EnvSettingUnit(
     mmkvKey: String,
     defaultValue: String,
     val title: String?,
+    protected val storage: EnvStorage = GlobalEnvStorage,
 ) : AbstractSettingUnit<String>(mmkvKey, defaultValue) {
 
     override fun getValue(): String {
-        return rendererEnvMMKV().getString(key, defaultValue)!!
+        return storage.getString(key, defaultValue)
             .also { state = it }
     }
 
     override fun saveValue(v: String): String {
-        rendererEnvMMKV().putString(key, v).apply()
+        storage.putString(key, v)
         return v
     }
 
@@ -54,7 +55,8 @@ sealed class EnvSettingUnit(
         defaultValue: String,
         val values: List<String>,
         title: String? = null,
-    ) : EnvSettingUnit(mmkvKey, defaultValue, title) {
+        storage: EnvStorage = GlobalEnvStorage,
+    ) : EnvSettingUnit(mmkvKey, defaultValue, title, storage) {
         private val checkKey = "${mmkvKey}:check"
 
         /**
@@ -64,13 +66,12 @@ sealed class EnvSettingUnit(
             private set
 
         fun initCheck() {
-            val mmkv = rendererEnvMMKV()
             val pluginDefault = rawEnv.check != false
 
             if (rawEnv.check == null) {
                 isEnabled = true
-            } else if (mmkv.containsKey(checkKey)) {
-                isEnabled = mmkv.getBoolean(checkKey, pluginDefault)
+            } else if (storage.containsKey(checkKey)) {
+                isEnabled = storage.getBoolean(checkKey, pluginDefault)
             } else {
                 isEnabled = pluginDefault
             }
@@ -78,7 +79,7 @@ sealed class EnvSettingUnit(
 
         fun saveCheck(enabled: Boolean) {
             isEnabled = enabled
-            rendererEnvMMKV().putBoolean(checkKey, enabled).apply()
+            storage.putBoolean(checkKey, enabled)
         }
     }
 
@@ -91,7 +92,8 @@ sealed class EnvSettingUnit(
         val rawEnv: RendererConfig.Env.CustomizableEnv,
         defaultValue: String,
         title: String? = null,
-    ) : EnvSettingUnit(mmkvKey, defaultValue, title)
+        storage: EnvStorage = GlobalEnvStorage,
+    ) : EnvSettingUnit(mmkvKey, defaultValue, title, storage)
 
     /**
      * 开关式环境变量：启用/禁用该环境变量
@@ -105,7 +107,8 @@ sealed class EnvSettingUnit(
         defaultValue: String,
         val envValue: String,
         title: String? = null,
-    ) : EnvSettingUnit(mmkvKey, defaultValue, title) {
+        storage: EnvStorage = GlobalEnvStorage,
+    ) : EnvSettingUnit(mmkvKey, defaultValue, title, storage) {
         /** 当前开关是否启用 */
         val isEnabled: Boolean get() = state.isNotEmpty()
     }

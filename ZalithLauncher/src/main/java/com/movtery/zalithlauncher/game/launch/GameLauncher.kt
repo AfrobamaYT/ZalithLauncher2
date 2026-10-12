@@ -41,6 +41,8 @@ import com.movtery.zalithlauncher.game.multirt.RuntimesManager
 import com.movtery.zalithlauncher.game.plugin.Plugin
 import com.movtery.zalithlauncher.game.plugin.driver.DriverPluginManager
 import com.movtery.zalithlauncher.game.plugin.renderer.RendererPluginManager
+import com.movtery.zalithlauncher.game.plugin.renderer_v2.RendererV2Data
+import com.movtery.zalithlauncher.game.plugin.renderer_v2.data.VersionEnvStorage
 import com.movtery.zalithlauncher.game.renderer.Renderers
 import com.movtery.zalithlauncher.game.renderer.renderers.GL4ESRenderer
 import com.movtery.zalithlauncher.game.renderer.renderers.NGGL4ESRenderer
@@ -191,7 +193,7 @@ class GameLauncher(
             }
         }
         if (Renderers.isCurrentRendererValid()) {
-            setRendererEnv(envMap)
+            setRendererEnv(envMap, version)
         }
         envMap["ZALITH_VERSION_CODE"] = BuildConfig.VERSION_CODE.toString()
 
@@ -391,7 +393,7 @@ private fun checkAndUsedJSPH(envMap: MutableMap<String, String>, runtime: Runtim
     }
 }
 
-private fun setRendererEnv(envMap: MutableMap<String, String>) {
+private fun setRendererEnv(envMap: MutableMap<String, String>, version: Version) {
     val renderer = Renderers.getCurrentRenderer()
     val rendererId = renderer.getRendererId()
 
@@ -406,7 +408,13 @@ private fun setRendererEnv(envMap: MutableMap<String, String>) {
         envMap["LIBGL_NORMALIZE"] = "1"
     }
 
-    envMap += renderer.getRendererEnv().value
+    val versionConfig = version.getVersionConfig()
+    if (renderer is RendererV2Data && versionConfig.renderer.isNotEmpty()) {
+        val storage = VersionEnvStorage(versionConfig)
+        envMap += renderer.env.getEnv(storage)
+    } else {
+        envMap += renderer.getRendererEnv().value
+    }
 
     renderer.getRendererEGL()?.let { eglName ->
         envMap["POJAVEXEC_EGL"] = eglName
