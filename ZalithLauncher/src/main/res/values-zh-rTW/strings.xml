@@ -784,6 +784,9 @@
     <string name="saves_manage_no_saves">目前版本尚無存檔</string>
     <string name="saves_manage_import_unpacking">正在解壓存檔：%s</string>
     <string name="saves_manage_import_failed">匯入存檔時遇到問題</string>
+    <string name="saves_manage_compress_share">壓縮存檔並分享</string>
+    <string name="saves_manage_compressing">正在壓縮存檔：%s</string>
+    <string name="saves_manage_export_failed">壓縮存檔時遇到問題</string>
     <!--  遊戲  -->
     <string name="minecraft_download_stat_download_task">統計下載任務</string>
     <string name="minecraft_download_stat_verify_task">統計驗證任務</string>
