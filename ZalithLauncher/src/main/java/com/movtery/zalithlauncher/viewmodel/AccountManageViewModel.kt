@@ -73,6 +73,7 @@ import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -572,6 +573,8 @@ class AccountManageViewModel @AssistedInject constructor(
                         //同时更新本地的皮肤/披风
                         runCatching {
                             account.downloadYggdrasil(refresh = false)
+                        }.onFailure { e ->
+                            if (e is CancellationException) throw e
                         }
 
                         val activeCape = profile.capes.findUsing()

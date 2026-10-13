@@ -1466,7 +1466,7 @@ fun ChangeSkinDialog(
                             }
 
                             // 独立加载披风：列表就绪前若本地有缓存披风则优先显示，列表加载完或切换时更新
-                            LaunchedEffect(pageFinished, currentCapeToLoad) {
+                            LaunchedEffect(pageFinished, currentCapeToLoad, availableCapes) {
                                 if (!pageFinished) return@LaunchedEffect
                                 if (account.isMicrosoftAccount()) {
                                     if (currentCapeToLoad != EmptyCape) {
