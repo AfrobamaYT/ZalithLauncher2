@@ -571,7 +571,7 @@ class AccountManageViewModel @AssistedInject constructor(
                         cacheAllCapes(profile)
                         //同时更新本地的皮肤/披风
                         runCatching {
-                            account.downloadYggdrasil()
+                            account.downloadYggdrasil(refresh = false)
                         }
 
                         val activeCape = profile.capes.findUsing()

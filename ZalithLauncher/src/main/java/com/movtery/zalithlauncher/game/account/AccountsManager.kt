@@ -57,7 +57,7 @@ object AccountsManager {
     private val _authServersFlow = MutableStateFlow<List<AuthServer>>(emptyList())
     val authServersFlow = _authServersFlow.asStateFlow()
 
-    private val _refreshWardrobe = MutableStateFlow(0L)
+    private val _refreshWardrobe = MutableStateFlow(false)
     /** 控制刷新所有账号衣橱 */
     val refreshWardrobe = _refreshWardrobe.asStateFlow()
 
@@ -90,7 +90,7 @@ object AccountsManager {
      * 刷新所有账号的衣橱
      */
     fun refreshWardrobe() {
-        _refreshWardrobe.update { it + 1 }
+        _refreshWardrobe.update { !it }
     }
 
     private suspend fun suspendReloadAccounts() {
