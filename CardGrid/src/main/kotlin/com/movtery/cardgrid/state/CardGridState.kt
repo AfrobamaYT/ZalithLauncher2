@@ -58,7 +58,16 @@ import kotlin.math.roundToInt
 data class GridCard(
     val id: String,
     val type: CardType,
-    val layout: CardRect
+    val layout: CardRect,
+    /** 跨度折算基准（用户结算时的跨度与列数），窗口列数变化时自基准无损折算 */
+    val reflowBase: ReflowBase? = null
+)
+
+/** 卡片跨度的重排基准 */
+data class ReflowBase(
+    val width: Int,
+    val height: Int,
+    val columns: Int
 )
 
 /** 待播种的持久化卡片布局，[typeId] 须能在播种的类型表中找到 */
@@ -162,11 +171,19 @@ class CardGridState internal constructor(
     var displaced by mutableStateOf<Map<String, CardRect>>(emptyMap())
         private set
 
+    /** 被压卡片的让位方向锁定表：卡片持续被压住期间方向保持稳定，避免指针扫过卡片中心时来回翻转 */
+    private val lockedDirections = mutableMapOf<String, IntOffset>()
+
     /** 布局发生结算后的回调（用于持久化） */
     var onLayoutCommitted: () -> Unit = {}
 
     /** 卡片被移除后的回调（用于同步外部与该卡片关联的数据） */
     var onCardRemoved: (cardId: String) -> Unit = {}
+
+    /** 布局结算落盘；几何未就绪时的结算属于瞬态补位，不覆写有效的持久化数据 */
+    private fun commitLayout() {
+        if (geometryReady) onLayoutCommitted()
+    }
 
     /** 快速空间动画（拖动中的让位） */
     internal var fastSpec: AnimationSpec<Rect> = spring(
@@ -174,7 +191,7 @@ class CardGridState internal constructor(
         stiffness = Spring.StiffnessMediumLow
     )
 
-    /** 默认空间动画（结算、压实） */
+    /** 默认空间动画（结算、重排） */
     internal var defaultSpec: AnimationSpec<Rect> = spring(
         dampingRatio = Spring.DampingRatioNoBouncy,
         stiffness = Spring.StiffnessMediumLow
@@ -201,7 +218,7 @@ class CardGridState internal constructor(
 
     /**
      * 播种卡片类型与持久化的卡片布局：
-     * 类型表即刻生效，卡片布局待网格几何就绪后校验修复（列数一致）或按阅读顺序重排（列数不一致）。
+     * 类型表即刻生效，卡片布局待网格几何就绪后校验修复（列数一致或未知）或按阅读顺序重排（列数不一致）。
      * 重复 id 的卡片仅保留最先出现的一个，类型未知的卡片被丢弃。
      */
     fun seed(types: List<CardType>, seeds: List<CardSeed>, storedColumns: Int) {
@@ -214,11 +231,14 @@ class CardGridState internal constructor(
         if (geometryReady) materializePending(newColumns = geometry.columns)
     }
 
-    private fun materializePending(newColumns: Int) {
-        val pending = pendingSeeds ?: return
+    /**
+     * @return 是否播种了待播卡片
+     */
+    private fun materializePending(newColumns: Int): Boolean {
+        val pending = pendingSeeds ?: return false
         pendingSeeds = null
         val typeIdById = pending.associate { it.id to it.typeId }
-        val layouts = if (pendingColumns == newColumns) {
+        val layouts = if (pendingColumns == newColumns || pendingColumns <= 0) {
             GridEngine.validate(pending.map { it.layout }, newColumns) { rect ->
                 typeById[typeIdById[rect.id]]?.limits ?: CardLimits.DEFAULT
             }
@@ -234,17 +254,29 @@ class CardGridState internal constructor(
 
         val materialized = pending.mapNotNull { seed ->
             typeById[seed.typeId]?.let { type ->
-                GridCard(id = seed.id, type = type, layout = layouts.getValue(seed.id))
+                val layout = layouts.getValue(seed.id)
+                //折算基准取持久化跨度与存储列数，存储列数未知时以当前几何为基准
+                val base = if (pendingColumns > 0) {
+                    ReflowBase(seed.layout.width, seed.layout.height, pendingColumns)
+                } else {
+                    ReflowBase(layout.width, layout.height, newColumns)
+                }
+                GridCard(id = seed.id, type = type, layout = layout, reflowBase = base)
             }
         }
-        cards = cards + materialized
+        //播种布局以持久化数据为准，替换几何就绪前先行补位加入的同 id 卡片，避免重复
+        val seededIds = materialized.mapTo(mutableSetOf()) { it.id }
+        cards = cards.filterNot { it.id in seededIds } + materialized
         materialized.forEach { animateTo(it, effectiveLayout(it), defaultSpec) }
+        return true
     }
 
     // ---------- 几何 ----------
 
-    /** 依据容器宽度更新网格；列数变化时触发整体重排 */
+    /** 依据容器宽度更新网格，列数变化时触发整体重排 */
     fun updateGeometry(widthDp: Float, density: Density) {
+        if (widthDp <= 0f) return // 宽度无效时忽略本次测量，避免瞬态零宽把网格重排进退化的几何
+        val wasReady = geometryReady
         val oldColumns = geometry.columns
         val newGeometry = computeGridGeometry(widthDp)
         cellPx = newGeometry.cellSize * density.density
@@ -253,13 +285,27 @@ class CardGridState internal constructor(
         }
         densityFactor = density.density
         geometry = newGeometry
-        if (widthDp > 0f) {
-            geometryReady = true
-            materializePending(newColumns = newGeometry.columns)
-        }
-        if (newGeometry.columns != oldColumns && cards.isNotEmpty()) {
+        geometryReady = true
+        //本次播种落位的卡片从未按旧几何布局，直接重排会按错误比例折算尺寸
+        val materialized = materializePending(newColumns = newGeometry.columns)
+        //旧几何来自真实测量时才视为列数变化；初始默认几何只用于占位，不参与重排
+        if (!materialized && wasReady && newGeometry.columns != oldColumns && cards.isNotEmpty()) {
             reflowTo(newColumns = newGeometry.columns, oldColumns = oldColumns)
         }
+    }
+
+    /**
+     * 卡片布局矩形在窗口坐标系中的位置
+     */
+    fun rootRectOf(card: GridCard): Rect {
+        val rect = rectFor(card.layout)
+        val offset = areaOffsetInRoot
+        return Rect(
+            left = rect.left + offset.x,
+            top = rect.top + offset.y,
+            right = rect.right + offset.x,
+            bottom = rect.bottom + offset.y
+        )
     }
 
     /** 卡片布局对应的渲染矩形（px），锚点为网格左上角 */
@@ -296,24 +342,22 @@ class CardGridState internal constructor(
         val card = GridCard(
             id = id,
             type = type,
-            layout = CardRect(id = id, x = slot.x, y = slot.y, width = width, height = height)
+            layout = CardRect(id = id, x = slot.x, y = slot.y, width = width, height = height),
+            reflowBase = ReflowBase(width, height, geometry.columns)
         )
         cards = cards + card
-        onLayoutCommitted()
+        commitLayout()
         return card
     }
 
-    /** 移除一张卡片并压实剩余布局 */
+    /** 移除一张卡片，其余布局保持原样 */
     fun removeCard(id: String) {
         val removed = cards.firstOrNull { it.id == id } ?: return
-        val remaining = cards.filterNot { it.id == id }
-        val compacted = GridEngine.compact(remaining.map { it.layout }).associateBy { it.id }
-        cards = remaining.map { card -> card.copy(layout = compacted.getValue(card.id)) }
+        cards = cards.filterNot { it.id == id }
         animators.remove(removed.id)
         if (adjustingCardId == id) adjustingCardId = null
         if (session?.card?.id == id) endSession()
-        cards.forEach { card -> animateTo(card, effectiveLayout(card), defaultSpec) }
-        onLayoutCommitted()
+        commitLayout()
         onCardRemoved(id)
     }
 
@@ -392,18 +436,43 @@ class CardGridState internal constructor(
             (topLeft.y / cellPx).roundToInt().coerceAtLeast(0)
         )
         val preview = current.card.layout.positionAt(target)
-        applyPreview(
-            preview,
-            GridEngine.resolveDisplacements(
-                moving = preview,
-                columns = geometry.columns,
-                cards = layouts(),
-                pointer = IntOffset(
-                    (pointer.x / cellPx).roundToInt(),
-                    (pointer.y / cellPx).roundToInt()
-                )
-            )
+        val pointerCell = IntOffset(
+            (pointer.x / cellPx).roundToInt(),
+            (pointer.y / cellPx).roundToInt()
         )
+        lockDisplacementDirections(preview, pointerCell)
+        val displacements = GridEngine.resolveDisplacements(
+            moving = preview,
+            columns = geometry.columns,
+            cards = layouts(),
+            pointer = pointerCell,
+            directions = lockedDirections
+        )
+        if (displacements == null) {
+            // 引擎无法确定让位方向（方向信息缺失）时兜底：落点钳制到最近可行空位
+            val clamped = GridEngine.findNearestFreeSlot(
+                width = current.card.layout.width,
+                height = current.card.layout.height,
+                origin = target,
+                columns = geometry.columns,
+                obstacles = layouts().filterNot { it.id == current.card.id }
+            ) ?: return
+            applyPreview(current.card.layout.positionAt(clamped), emptyMap())
+            return
+        }
+        applyPreview(preview, displacements)
+    }
+
+    /** 锁定持续被压卡片的让位方向，脱离被压的卡片解除锁定 */
+    private fun lockDisplacementDirections(preview: CardRect, pointerCell: IntOffset) {
+        val sessionId = session?.card?.id
+        val overlapped = layouts().filter { it.id != sessionId && it.intersects(preview) }
+        lockedDirections.keys.retainAll(overlapped.mapTo(mutableSetOf()) { it.id })
+        overlapped.forEach { card ->
+            lockedDirections.getOrPut(card.id) {
+                GridEngine.displacementDirection(pointerCell, card)
+            }
+        }
     }
 
     /** 松手：结算落位与被挤开的卡片，压实并持久化 */
@@ -569,7 +638,7 @@ class CardGridState internal constructor(
         }
     }
 
-    /** 提交会话结果：沿用会话过程中的让位结算，压实并持久化 */
+    /** 提交会话结果：沿用会话过程中的让位结算并持久化 */
     private fun commit(target: CardRect) {
         val current = session ?: return
         // endSession 会清空跟手矩形，必须先捕获供动画器吸附
@@ -577,18 +646,19 @@ class CardGridState internal constructor(
         val settled = displaced
         cards = cards.map { card ->
             when {
-                card.id == current.card.id -> card.copy(layout = target)
+                card.id == current.card.id -> card.copy(
+                    layout = target,
+                    //用户结算的跨度成为新的折算基准
+                    reflowBase = ReflowBase(target.width, target.height, geometry.columns)
+                )
                 else -> settled[card.id]?.let { card.copy(layout = it) } ?: card
             }
         }
-        cards = compactCards(cards)
-        // 压实可能改变会话卡的最终落位，以列表中的最终布局为准
-        val finalLayout = cards.firstOrNull { it.id == current.card.id }?.layout ?: target
         endSession()
-        settleSessionCard(current.card, rawRect, finalLayout)
+        settleSessionCard(current.card, rawRect, target)
         cards.filterNot { it.id == current.card.id }
             .forEach { animateTo(it, effectiveLayout(it), defaultSpec) }
-        onLayoutCommitted()
+        commitLayout()
     }
 
     /** 取消会话：让位卡与会话卡弹回原位，不产生任何结算 */
@@ -609,19 +679,29 @@ class CardGridState internal constructor(
         dragRawRect = null
         pointerPosition = null
         displaced = emptyMap()
+        lockedDirections.clear()
     }
 
-    /** 垂直压实全部卡片，保持实例映射 */
-    private fun compactCards(list: List<GridCard>): List<GridCard> {
-        val compacted = GridEngine.compact(list.map { it.layout }).associateBy { it.id }
-        return list.map { card -> card.copy(layout = compacted.getValue(card.id)) }
-    }
-
-    /** 列数变化：按阅读顺序重排并持久化 */
     private fun reflowTo(newColumns: Int, oldColumns: Int) {
+        //跨度自基准一次性折算，避免逐级取整把小幅增长吞噬成固定跨度
+        val respanned = cards.map { card ->
+            val base = card.reflowBase
+            if (base == null) {
+                card.layout
+            } else {
+                val lim = card.type.limits.clampedFor(newColumns)
+                card.layout.copy(
+                    width = (base.width * newColumns.toFloat() / base.columns).roundToInt()
+                        .let(lim::clampWidth),
+                    height = (base.height * newColumns.toFloat() / base.columns).roundToInt()
+                        .let(lim::clampHeight)
+                )
+            }
+        }
+        //跨度已折算完毕，oldColumns 传同值使重排只做位置打包
         val layouts = GridEngine.reflow(
-            cards = layouts(),
-            oldColumns = oldColumns,
+            cards = respanned,
+            oldColumns = newColumns,
             columns = newColumns
         ) { rect -> cards.firstOrNull { it.id == rect.id }?.type?.limits ?: CardLimits.DEFAULT }
             .associateBy { it.id }
@@ -629,7 +709,7 @@ class CardGridState internal constructor(
         endSession()
         adjustingCardId = null
         animateAll()
-        onLayoutCommitted()
+        commitLayout()
     }
 
     // ---------- 内部：跟手矩形 ----------

@@ -28,9 +28,11 @@ import com.movtery.zalithlauncher.BuildKeys
 import com.movtery.zalithlauncher.game.download.assets.platform.Platform
 import com.movtery.zalithlauncher.game.path.GamePathManager
 import com.movtery.zalithlauncher.game.version.installed.GraphicsApi
+import com.movtery.zalithlauncher.setting.enums.ActionMenuSide
 import com.movtery.zalithlauncher.setting.enums.AppLanguage
 import com.movtery.zalithlauncher.setting.enums.BackgroundBlur
 import com.movtery.zalithlauncher.setting.enums.DarkMode
+import com.movtery.zalithlauncher.setting.enums.FpsDisplayMode
 import com.movtery.zalithlauncher.setting.enums.GamepadInputMode
 import com.movtery.zalithlauncher.setting.enums.GestureActionType
 import com.movtery.zalithlauncher.setting.enums.MirrorSourceType
@@ -95,6 +97,11 @@ object AllSettings : SettingsRegistry() {
      * 持续性能模式
      */
     val sustainedPerformance = boolSetting("sustainedPerformance", false)
+
+    /**
+     * 游戏运行时请求系统切换到同分辨率最高刷新率档位（关闭则回落系统自适应刷新）
+     */
+    val requestMaxRefreshRate = boolSetting("requestMaxRefreshRate", true)
 
     /**
      * 使用系统的 Vulkan 驱动
@@ -410,6 +417,11 @@ object AllSettings : SettingsRegistry() {
     val launcherSwapAnimateType = enumSetting("launcherSwapAnimateType", TransitionAnimationType.JELLY_BOUNCE)
 
     /**
+     * 主界面操作菜单的停泊侧
+     */
+    val launcherActionMenuSide = enumSetting("launcherActionMenuSide", ActionMenuSide.END)
+
+    /**
      * 启动器背景元素不透明度
      */
     val launcherBackgroundOpacity = intSetting("launcherBackgroundOpacity", 80, 20..100)
@@ -483,6 +495,11 @@ object AllSettings : SettingsRegistry() {
      * 在游戏菜单悬浮窗上显示帧率
      */
     val showFPS = boolSetting("showFPS", true)
+
+    /**
+     * 游戏内帧率的展示模式
+     */
+    val fpsDisplayMode = enumSetting("fpsDisplayMode", FpsDisplayMode.NUMBER)
 
     /**
      * 在游戏菜单悬浮窗上显示内存
