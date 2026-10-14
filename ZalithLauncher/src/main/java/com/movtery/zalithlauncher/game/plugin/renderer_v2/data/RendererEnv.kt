@@ -32,62 +32,30 @@ class RendererEnv(
     private val settingUnits: Map<String, EnvSettingUnit>
 
     init {
-        val mmkv = rendererEnvMMKV()
-        val prefix = "$packageName:"
-
-        // 收集所有可配置环境变量键（Selectable / Customizable / Toggleable）
-        val currentConfigurableKeys = envs.mapNotNull { env ->
-            when (env) {
-                is RendererConfig.Env.NormalEnv -> null
-                is RendererConfig.Env.SelectableEnv -> env.key
-                is RendererConfig.Env.CustomizableEnv -> env.key
-                is RendererConfig.Env.ToggleableEnv -> env.key
-            }
-        }.toSet()
-
-        // 清理插件更新后不再受支持的环境变量
-        mmkv.allKeys()
-            ?.filter { it.startsWith(prefix) }
-            ?.forEach { storedKey ->
-                val envKey = storedKey.removePrefix(prefix)
-                val baseKey = envKey.removeSuffix(":check")
-                if (baseKey !in currentConfigurableKeys) {
-                    mmkv.remove(storedKey)
-                }
-        }
-
-        settingUnits = createSettingUnits(GlobalEnvStorage).associateBy { unit ->
-            when (unit) {
-                is EnvSettingUnit.Selectable -> unit.rawEnv.key
-                is EnvSettingUnit.Customizable -> unit.rawEnv.key
-                is EnvSettingUnit.Toggleable -> unit.rawEnv.key
-            }
-        }
+        settingUnits = createSettingUnits(GlobalEnvStorage).associateBy { it.key }
     }
 
     /**
      * 为指定的存储创建设置单元列表
      */
     fun createSettingUnits(storage: EnvStorage = GlobalEnvStorage): List<EnvSettingUnit> {
-        val prefix = "$packageName:"
+        val scope = storage.scoped(packageName)
+        cleanupRemovedEnvKeys(scope)
         val units = mutableListOf<EnvSettingUnit>()
         for (env in envs) {
             when (env) {
                 is RendererConfig.Env.NormalEnv -> {}
 
                 is RendererConfig.Env.SelectableEnv -> {
-                    val mmkvKey = "$prefix${env.key}"
-                    val title = env.getTitleMetaString()?.let { genSummary(it) }
                     val unit = EnvSettingUnit.Selectable(
-                        mmkvKey = mmkvKey,
                         rawEnv = env,
                         defaultValue = env.items.defaultValue,
                         values = buildList {
                             add(env.items.defaultValue)
                             addAll(env.items.values)
                         },
-                        title = title,
-                        storage = storage
+                        title = env.getTitleMetaString()?.let { genSummary(it) },
+                        storage = scope
                     )
                     unit.init()
                     unit.initCheck()
@@ -101,31 +69,23 @@ class RendererEnv(
                 }
 
                 is RendererConfig.Env.CustomizableEnv -> {
-                    val mmkvKey = "$prefix${env.key}"
-                    val title = env.getTitleMetaString()?.let { genSummary(it) }
-                    val default = env.defaultValue ?: ""
                     val unit = EnvSettingUnit.Customizable(
-                        mmkvKey = mmkvKey,
                         rawEnv = env,
-                        defaultValue = default,
-                        title = title,
-                        storage = storage
+                        defaultValue = env.defaultValue ?: "",
+                        title = env.getTitleMetaString()?.let { genSummary(it) },
+                        storage = scope
                     )
                     unit.init()
                     units.add(unit)
                 }
 
                 is RendererConfig.Env.ToggleableEnv -> {
-                    val mmkvKey = "$prefix${env.key}"
-                    val title = env.getTitleMetaString()?.let { genSummary(it) }
-                    val default = if (env.toggle) env.value else ""
                     val unit = EnvSettingUnit.Toggleable(
-                        mmkvKey = mmkvKey,
                         rawEnv = env,
-                        defaultValue = default,
+                        defaultValue = if (env.toggle) env.value else "",
                         envValue = env.value,
-                        title = title,
-                        storage = storage
+                        title = env.getTitleMetaString()?.let { genSummary(it) },
+                        storage = scope
                     )
                     unit.init()
                     units.add(unit)
@@ -143,13 +103,7 @@ class RendererEnv(
         val units = if (storage === GlobalEnvStorage) {
             settingUnits
         } else {
-            createSettingUnits(storage).associateBy { unit ->
-                when (unit) {
-                    is EnvSettingUnit.Selectable -> unit.rawEnv.key
-                    is EnvSettingUnit.Customizable -> unit.rawEnv.key
-                    is EnvSettingUnit.Toggleable -> unit.rawEnv.key
-                }
-            }
+            createSettingUnits(storage).associateBy { it.key }
         }
         for (env in envs) {
             when (env) {
@@ -188,6 +142,24 @@ class RendererEnv(
      * 为指定存储创建所有可配置环境变量的设置单元列表（如版本独立配置）
      */
     fun createConfigurableUnits(storage: EnvStorage): List<EnvSettingUnit> = createSettingUnits(storage)
+
+    /**
+     * 清理插件更新后不再受支持的环境变量
+     */
+    private fun cleanupRemovedEnvKeys(scope: EnvStorageScope) {
+        val configurableKeys = envs.mapNotNull { env ->
+            when (env) {
+                is RendererConfig.Env.NormalEnv -> null
+                is RendererConfig.Env.SelectableEnv -> env.key
+                is RendererConfig.Env.CustomizableEnv -> env.key
+                is RendererConfig.Env.ToggleableEnv -> env.key
+            }
+        }.toSet()
+
+        scope.keys()
+            .filter { it !in configurableKeys }
+            .forEach { scope.remove(it) }
+    }
 
     /**
      * 从 [RendererConfig.Env] 中提取 [RendererConfig.MetaString] 的 key

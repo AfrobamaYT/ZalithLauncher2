@@ -233,9 +233,7 @@ private fun VersionConfigs(
                 if (v2Plugin != null) {
                     IconButton(
                         onClick = {
-                            val storage = VersionEnvStorage(config) {
-                                config.saveOrShowError(submitError)
-                            }
+                            val storage = VersionEnvStorage(config.getVersionPath())
                             v2PluginEnvUnits = v2Plugin.env.createConfigurableUnits(storage)
                             showV2ConfigDialog = true
                         }

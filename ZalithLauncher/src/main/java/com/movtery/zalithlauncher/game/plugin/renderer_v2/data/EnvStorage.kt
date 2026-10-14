@@ -18,79 +18,152 @@
 
 package com.movtery.zalithlauncher.game.plugin.renderer_v2.data
 
-import com.movtery.zalithlauncher.game.version.installed.VersionConfig
+import com.movtery.zalithlauncher.game.version.installed.getZalithVersionPath
+import com.movtery.zalithlauncher.path.GLOBAL_JSON
+import com.movtery.zalithlauncher.utils.logging.Logger
+import java.io.File
+import java.io.FileOutputStream
+
+private const val TAG = "EnvStorage"
 
 /**
- * 环境变量存储接口，支持全局存储（MMKV）与版本独立存储（VersionConfig）
+ * 环境变量存储接口，支持全局存储（MMKV）与版本独立存储（renderer.config）
  */
 interface EnvStorage {
-    fun getString(key: String, defaultValue: String): String
-    fun putString(key: String, value: String)
-    fun getBoolean(key: String, defaultValue: Boolean): Boolean
-    fun putBoolean(key: String, value: Boolean)
-    fun containsKey(key: String): Boolean
+    /**
+     * 获取指定渲染器插件包名下的命名空间存储
+     */
+    fun scoped(packageName: String): EnvStorageScope
+}
+
+/**
+ * 渲染器插件命名空间内的环境变量存储
+ */
+interface EnvStorageScope {
+    fun getValue(key: String, defaultValue: String): String
+    fun putValue(key: String, value: String)
+    fun getCheck(key: String, defaultValue: Boolean): Boolean
+    fun putCheck(key: String, value: Boolean)
+    fun remove(key: String)
+    fun keys(): Set<String>
 }
 
 /**
  * 全局环境变量存储（基于 MMKV）
  */
 object GlobalEnvStorage : EnvStorage {
-    private val mmkv get() = rendererEnvMMKV()
+    override fun scoped(packageName: String): EnvStorageScope = Scope(packageName)
 
-    override fun getString(key: String, defaultValue: String): String =
-        mmkv.getString(key, defaultValue) ?: defaultValue
+    private class Scope(
+        private val packageName: String
+    ) : EnvStorageScope {
+        private val mmkv get() = rendererEnvMMKV()
 
-    override fun putString(key: String, value: String) {
-        mmkv.putString(key, value).apply()
+        override fun getValue(key: String, defaultValue: String): String =
+            mmkv.getString(valueKey(key), defaultValue) ?: defaultValue
+
+        override fun putValue(key: String, value: String) {
+            mmkv.putString(valueKey(key), value).apply()
+        }
+
+        override fun getCheck(key: String, defaultValue: Boolean): Boolean =
+            mmkv.getBoolean(checkKey(key), defaultValue)
+
+        override fun putCheck(key: String, value: Boolean) {
+            mmkv.putBoolean(checkKey(key), value).apply()
+        }
+
+        override fun remove(key: String) {
+            mmkv.remove(valueKey(key))
+            mmkv.remove(checkKey(key))
+        }
+
+        override fun keys(): Set<String> {
+            val prefix = "$packageName:"
+            return mmkv.allKeys()
+                ?.filter { it.startsWith(prefix) }
+                ?.map { it.removePrefix(prefix).removeSuffix(":check") }
+                ?.toSet()
+                ?: emptySet()
+        }
+
+        private fun valueKey(key: String) = "$packageName:$key"
+        private fun checkKey(key: String) = "$packageName:$key:check"
     }
-
-    override fun getBoolean(key: String, defaultValue: Boolean): Boolean =
-        mmkv.getBoolean(key, defaultValue)
-
-    override fun putBoolean(key: String, value: Boolean) {
-        mmkv.putBoolean(key, value).apply()
-    }
-
-    override fun containsKey(key: String): Boolean = mmkv.containsKey(key)
 }
 
 /**
- * 版本独立环境变量存储（基于 VersionConfig）
- * 读写均只针对该版本的 VersionConfig，不继承全局配置
+ * 版本独立环境变量存储
+ * 读写均只针对该版本的独立配置文件，不继承全局配置
  */
 class VersionEnvStorage(
-    private val config: VersionConfig,
-    private val onSave: (() -> Unit)? = null
+    versionFolder: File
 ) : EnvStorage {
-    override fun getString(key: String, defaultValue: String): String {
-        val map = config.rendererEnv
-        if (map != null && map.containsKey(key)) {
-            return map[key] ?: defaultValue
+    private val configFolder = getZalithVersionPath(versionFolder)
+    private val configFile = File(configFolder, RendererEnvConfig.CONFIG_FILE_NAME)
+    private val config: RendererEnvConfig = loadConfig()
+
+    override fun scoped(packageName: String): EnvStorageScope = Scope(packageName)
+
+    private inner class Scope(
+        private val packageName: String
+    ) : EnvStorageScope {
+        override fun getValue(key: String, defaultValue: String): String =
+            config.renderers[packageName]?.envs?.get(key) ?: defaultValue
+
+        override fun putValue(key: String, value: String) {
+            envs().envs[key] = value
+            persist()
         }
-        return defaultValue
-    }
 
-    override fun putString(key: String, value: String) {
-        val map = config.rendererEnv ?: mutableMapOf<String, String>().also { config.rendererEnv = it }
-        map[key] = value
-        onSave?.invoke()
-    }
+        override fun getCheck(key: String, defaultValue: Boolean): Boolean =
+            config.renderers[packageName]?.checks?.get(key) ?: defaultValue
 
-    override fun getBoolean(key: String, defaultValue: Boolean): Boolean {
-        val map = config.rendererEnv
-        if (map != null && map.containsKey(key)) {
-            return map[key]?.toBooleanStrictOrNull() ?: defaultValue
+        override fun putCheck(key: String, value: Boolean) {
+            envs().checks[key] = value
+            persist()
         }
-        return defaultValue
+
+        override fun remove(key: String) {
+            val entry = config.renderers[packageName] ?: return
+            val changed = entry.envs.remove(key) != null || entry.checks.remove(key) != null
+            if (changed) {
+                if (entry.envs.isEmpty() && entry.checks.isEmpty()) {
+                    config.renderers.remove(packageName)
+                }
+                persist()
+            }
+        }
+
+        override fun keys(): Set<String> {
+            val entry = config.renderers[packageName] ?: return emptySet()
+            return entry.envs.keys + entry.checks.keys
+        }
+
+        private fun envs(): RendererEnvs = config.renderers.getOrPut(packageName) { RendererEnvs() }
     }
 
-    override fun putBoolean(key: String, value: Boolean) {
-        val map = config.rendererEnv ?: mutableMapOf<String, String>().also { config.rendererEnv = it }
-        map[key] = value.toString()
-        onSave?.invoke()
+    private fun loadConfig(): RendererEnvConfig {
+        if (!configFile.isFile) return RendererEnvConfig()
+        return runCatching {
+            GLOBAL_JSON.decodeFromString<RendererEnvConfig>(configFile.readText())
+        }.onFailure { e ->
+            Logger.error(TAG, "Failed to parse the renderer environment configuration.", e)
+        }.getOrNull() ?: RendererEnvConfig()
     }
 
-    override fun containsKey(key: String): Boolean {
-        return config.rendererEnv?.containsKey(key) == true
+    private fun persist() {
+        val tmpFile = File(configFolder, "${RendererEnvConfig.CONFIG_FILE_NAME}.tmp")
+        runCatching {
+            if (!configFolder.exists()) configFolder.mkdirs()
+            FileOutputStream(tmpFile).use { stream ->
+                stream.write(GLOBAL_JSON.encodeToString(config).toByteArray())
+                stream.fd.sync()
+            }
+            check(tmpFile.renameTo(configFile)) { "Failed to replace the renderer environment configuration." }
+        }.onFailure { e ->
+            tmpFile.delete()
+            Logger.error(TAG, "An exception occurred while saving the renderer environment configuration.", e)
+        }
     }
 }

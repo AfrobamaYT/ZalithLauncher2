@@ -408,12 +408,12 @@ private fun setRendererEnv(envMap: MutableMap<String, String>, version: Version)
         envMap["LIBGL_NORMALIZE"] = "1"
     }
 
-    val versionConfig = version.getVersionConfig()
-    if (renderer is RendererV2Data && versionConfig.renderer.isNotEmpty()) {
-        val storage = VersionEnvStorage(versionConfig)
-        envMap += renderer.env.getEnv(storage)
+    // 仅当版本独立选择了当前这一渲染器时才使用版本独立配置
+    // 跟随全局时沿用全局配置
+    envMap += if (renderer is RendererV2Data && version.getVersionConfig().renderer == renderer.getUniqueIdentifier()) {
+        renderer.env.getEnv(VersionEnvStorage(version.getVersionPath()))
     } else {
-        envMap += renderer.getRendererEnv().value
+        renderer.getRendererEnv().value
     }
 
     renderer.getRendererEGL()?.let { eglName ->

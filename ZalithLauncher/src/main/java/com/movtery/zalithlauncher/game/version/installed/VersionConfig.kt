@@ -103,8 +103,6 @@ class VersionConfig(
     var touchVibrateDuration: Int = 100
     @SerializedName("touchVibrateKind")
     var touchVibrateKind: VibrationHandler.VibrateKind? = null
-    @SerializedName("rendererEnv")
-    var rendererEnv: MutableMap<String, String>? = null
 
     constructor(
         filePath: File,
@@ -124,7 +122,6 @@ class VersionConfig(
         ramAllocation: Int = -1,
         touchVibrateDuration: Int = 100,
         touchVibrateKind: VibrationHandler.VibrateKind? = null,
-        rendererEnv: MutableMap<String, String>? = null,
     ) : this(filePath) {
         this.isolationType = isolationType
         this.skipGameIntegrityCheck = skipGameIntegrityCheck
@@ -142,7 +139,6 @@ class VersionConfig(
         this.ramAllocation = ramAllocation
         this.touchVibrateDuration = touchVibrateDuration
         this.touchVibrateKind = touchVibrateKind
-        this.rendererEnv = rendererEnv?.toMutableMap()
     }
 
     fun copy(): VersionConfig = VersionConfig(
@@ -163,7 +159,6 @@ class VersionConfig(
         ramAllocation,
         touchVibrateDuration,
         touchVibrateKind,
-        rendererEnv?.toMutableMap(),
     )
 
     fun save() {
@@ -224,16 +219,6 @@ class VersionConfig(
             writeInt(ramAllocation)
             writeInt(touchVibrateDuration)
             writeInt(touchVibrateKind?.ordinal ?: -1)
-            val map = rendererEnv
-            if (map == null) {
-                writeInt(-1)
-            } else {
-                writeInt(map.size)
-                for ((k, v) in map) {
-                    writeString(k)
-                    writeString(v)
-                }
-            }
         }
     }
 
@@ -256,18 +241,6 @@ class VersionConfig(
             val ramAllocation = parcel.readInt()
             val touchVibrateDuration = parcel.readInt()
             val touchVibrateKind = VibrationHandler.VibrateKind.entries.getOrNull(parcel.readInt())
-            val rendererEnvSize = parcel.readInt()
-            val rendererEnv = if (rendererEnvSize == -1) {
-                null
-            } else {
-                mutableMapOf<String, String>().apply {
-                    repeat(rendererEnvSize) {
-                        val k = parcel.readString().orEmpty()
-                        val v = parcel.readString().orEmpty()
-                        put(k, v)
-                    }
-                }
-            }
 
             return VersionConfig(
                 versionPath,
@@ -287,7 +260,6 @@ class VersionConfig(
                 ramAllocation,
                 touchVibrateDuration,
                 touchVibrateKind,
-                rendererEnv,
             )
         }
 
