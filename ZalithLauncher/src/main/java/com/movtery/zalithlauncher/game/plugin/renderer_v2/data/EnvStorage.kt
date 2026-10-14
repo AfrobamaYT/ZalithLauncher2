@@ -101,9 +101,23 @@ class VersionEnvStorage(
 ) : EnvStorage {
     private val configFolder = getZalithVersionPath(versionFolder)
     private val configFile = File(configFolder, RendererEnvConfig.CONFIG_FILE_NAME)
-    private val config: RendererEnvConfig = loadConfig()
+    private var config: RendererEnvConfig = loadConfig()
 
     override fun scoped(packageName: String): EnvStorageScope = Scope(packageName)
+
+    /**
+     * 删除该版本的全部独立环境变量配置
+     */
+    fun delete() {
+        runCatching {
+            if (configFile.exists() && !configFile.delete()) {
+                error("Failed to delete the renderer environment configuration.")
+            }
+            config = RendererEnvConfig()
+        }.onFailure { e ->
+            Logger.error(TAG, "An exception occurred while deleting the renderer environment configuration.", e)
+        }
+    }
 
     private inner class Scope(
         private val packageName: String

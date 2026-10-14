@@ -408,10 +408,15 @@ private fun setRendererEnv(envMap: MutableMap<String, String>, version: Version)
         envMap["LIBGL_NORMALIZE"] = "1"
     }
 
-    // 仅当版本独立选择了当前这一渲染器时才使用版本独立配置
-    // 跟随全局时沿用全局配置
+    // 仅当版本独立选择了当前这一渲染器且存在独立配置时，才使用版本独立配置
+    // 无独立配置时环境变量整体跟随全局，全局修改实时生效
     envMap += if (renderer is RendererV2Data && version.getVersionConfig().renderer == renderer.getUniqueIdentifier()) {
-        renderer.env.getEnv(VersionEnvStorage(version.getVersionPath()))
+        val storage = VersionEnvStorage(version.getVersionPath())
+        if (storage.scoped(renderer.packageName).keys().isEmpty()) {
+            renderer.env.getEnv()
+        } else {
+            renderer.env.getEnv(storage)
+        }
     } else {
         renderer.getRendererEnv().value
     }

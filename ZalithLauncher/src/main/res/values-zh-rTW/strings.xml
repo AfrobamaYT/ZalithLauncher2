@@ -664,6 +664,8 @@
     <string name="versions_config_isolation_title">版本隔離</string>
     <string name="versions_config_isolation_summary">隔離目前版本，使各版本之間的資料互不干擾</string>
     <string name="versions_config_renderer">渲染器</string>
+    <string name="versions_config_renderer_reset_global">重設為全域</string>
+    <string name="versions_config_renderer_reset_global_message">啟動器將放棄目前版本對於 %s 的設定，重設為使用全域的設定，此操作無法復原</string>
     <string name="versions_config_vulkan_driver">Vulkan 驅動程式</string>
     <string name="versions_config_control">控制佈局</string>
     <string name="versions_config_java_runtime_summary">指定目前版本所使用的 Java 環境</string>

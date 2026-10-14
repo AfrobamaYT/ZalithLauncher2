@@ -64,6 +64,7 @@ import com.movtery.zalithlauncher.ui.androidText
 import com.movtery.zalithlauncher.ui.base.BaseScreen
 import com.movtery.zalithlauncher.ui.components.AnimatedColumn
 import com.movtery.zalithlauncher.ui.components.IDItem
+import com.movtery.zalithlauncher.ui.components.SimpleAlertDialog
 import com.movtery.zalithlauncher.ui.components.verticalScrollWithBar
 import com.movtery.zalithlauncher.ui.screens.NestedNavKey
 import com.movtery.zalithlauncher.ui.screens.NormalNavKey
@@ -212,6 +213,7 @@ private fun VersionConfigs(
             } else null
         }
         var showV2ConfigDialog by remember { mutableStateOf(false) }
+        var showResetGlobalDialog by remember { mutableStateOf(false) }
         var v2PluginEnvUnits by remember { mutableStateOf<List<EnvSettingUnit>?>(null) }
 
         ListSettingsCard(
@@ -261,7 +263,24 @@ private fun VersionConfigs(
                 onDismissRequest = {
                     showV2ConfigDialog = false
                     v2PluginEnvUnits = null
-                }
+                },
+                onResetToGlobal = { showResetGlobalDialog = true }
+            )
+        }
+
+        if (showResetGlobalDialog) {
+            val rendererName = v2Plugin?.getRendererName().orEmpty()
+            SimpleAlertDialog(
+                title = stringResource(R.string.versions_config_renderer_reset_global),
+                text = stringResource(R.string.versions_config_renderer_reset_global_message, rendererName),
+                onConfirm = {
+                    showResetGlobalDialog = false
+                    // 删除整个独立配置文件，放弃本版本的全部独立环境变量配置
+                    VersionEnvStorage(config.getVersionPath()).delete()
+                    showV2ConfigDialog = false
+                    v2PluginEnvUnits = null
+                },
+                onDismiss = { showResetGlobalDialog = false }
             )
         }
 
