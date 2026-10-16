@@ -52,6 +52,7 @@ import androidx.appcompat.app.AlertDialog;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.movtery.zalithlauncher.game.sdl.SdlBridge;
+import com.movtery.zalithlauncher.ui.theme.NativeThemeUtilsKt;
 import com.movtery.zalithlauncher.utils.logging.Logger;
 
 import java.io.FileNotFoundException;
@@ -1679,7 +1680,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
                     }
                 }
 
-                AlertDialog dialog = builder.create();
+                AlertDialog dialog = NativeThemeUtilsKt.createThemed(builder);
                 dialog.setOnDismissListener(unused -> latch.countDown());
                 for (int i = 3; i < buttonIds.length; ++i) {
                     final int id = buttonIds[i];
