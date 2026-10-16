@@ -244,6 +244,11 @@ class GameLauncher(
 
         disableSplash(gameDirPath)
 
+        if (version.getVersionInfo()?.hasLoader(ModLoader.NEOFORGE) == true) {
+            // 关闭NeoForge 12早期加载屏动画
+            disableFmlEarlyWindow(gameDirPath)
+        }
+
         //初始化运行环境
         this.runtime = runtime
         val launchArgs = LaunchArgs(
@@ -375,6 +380,40 @@ class GameLauncher(
                     }
                 }.onFailure {
                     Logger.warning(TAG, "Could not disable Forge 1.12.2 and below splash screen!", it)
+                }
+            } else {
+                Logger.warning(TAG, "Failed to create the configuration directory")
+            }
+        }
+    }
+
+    /**
+     * 关闭 FML 的早期加载屏
+     *
+     * NeoForge 12（MC 26.3+）移除了 -Dfml.earlyprogresswindow 属性通道，仅读取 config/fml.toml
+     * 早期加载屏的渲染会在启动扫描期反复分配 gralloc 缓冲，与启动器 UI 互相阻塞导致界面冻结直至无响应，
+     * 写入 earlyWindowControl = false 关闭
+     */
+    private fun disableFmlEarlyWindow(dir: File) {
+        File(dir, "config").let { configDir ->
+            if (configDir.ensureDirectorySilently()) {
+                val fmlToml = configDir.child("fml.toml")
+                runCatching {
+                    // 键置于文件头部，避免落入任何表作用域
+                    val merged = buildString {
+                        append("earlyWindowControl = false\n")
+                        if (fmlToml.isFile) {
+                            fmlToml.readLines().forEach { line ->
+                                // 剔除已有键，其余用户配置保留
+                                if (!line.trim().startsWith("earlyWindowControl")) {
+                                    append(line).append('\n')
+                                }
+                            }
+                        }
+                    }
+                    fmlToml.writeText(merged)
+                }.onFailure {
+                    Logger.warning(TAG, "Could not disable FML early loading screen!", it)
                 }
             } else {
                 Logger.warning(TAG, "Failed to create the configuration directory")
