@@ -244,6 +244,11 @@ class GameLauncher(
 
         disableSplash(gameDirPath)
 
+        if (version.getVersionInfo()?.hasLoader(ModLoader.NEOFORGE) == true) {
+            // 关闭NeoForge 12早期加载屏动画
+            disableFmlEarlyWindow(gameDirPath)
+        }
+
         //初始化运行环境
         this.runtime = runtime
         val launchArgs = LaunchArgs(
@@ -375,6 +380,52 @@ class GameLauncher(
                     }
                 }.onFailure {
                     Logger.warning(TAG, "Could not disable Forge 1.12.2 and below splash screen!", it)
+                }
+            } else {
+                Logger.warning(TAG, "Failed to create the configuration directory")
+            }
+        }
+    }
+
+    /**
+     * 关闭 FML 的早期加载屏
+     *
+     * NeoForge 12（MC 26.3+）移除了 -Dfml.earlyprogresswindow 属性通道，仅读取 config/fml.toml
+     * 早期加载屏的渲染会在启动扫描期反复分配 gralloc 缓冲，与启动器 UI 互相阻塞导致界面冻结直至无响应，
+     * 写入 earlyWindowControl = false 关闭
+     */
+    private fun disableFmlEarlyWindow(dir: File) {
+        File(dir, "config").let { configDir ->
+            if (configDir.ensureDirectorySilently()) {
+                val fmlToml = configDir.child("fml.toml")
+                val disabledLine = "earlyWindowControl = false"
+                runCatching {
+                    if (!fmlToml.isFile) {
+                        fmlToml.writeText("$disabledLine\n")
+                        return@runCatching
+                    }
+
+                    val lines = fmlToml.readLines()
+                    val keyLine = lines.find { it.trim().startsWith("earlyWindowControl") }
+                    if (keyLine == null) {
+                        fmlToml.writeText(
+                            lines.joinToString(separator = "\n", prefix = "$disabledLine\n", postfix = "\n")
+                        )
+                    } else {
+                        // 值可能带引号或行尾注释，取值前先截断
+                        val value = keyLine.substringAfter('=').substringBefore('#').trim().trim('"', '\'')
+                        if (value.equals("true", ignoreCase = true)) {
+                            // 仅改写该行的值，行内其余内容保留
+                            val fixedLine = keyLine.replaceFirst(Regex("true", RegexOption.IGNORE_CASE), "false")
+                            fmlToml.writeText(
+                                lines.joinToString(separator = "\n", postfix = "\n") { line ->
+                                    if (line == keyLine) fixedLine else line
+                                }
+                            )
+                        }
+                    }
+                }.onFailure {
+                    Logger.warning(TAG, "Could not disable FML early loading screen!", it)
                 }
             } else {
                 Logger.warning(TAG, "Failed to create the configuration directory")
