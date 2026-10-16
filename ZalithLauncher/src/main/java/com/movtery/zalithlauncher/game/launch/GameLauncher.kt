@@ -398,20 +398,32 @@ class GameLauncher(
         File(dir, "config").let { configDir ->
             if (configDir.ensureDirectorySilently()) {
                 val fmlToml = configDir.child("fml.toml")
+                val disabledLine = "earlyWindowControl = false"
                 runCatching {
-                    // 键置于文件头部，避免落入任何表作用域
-                    val merged = buildString {
-                        append("earlyWindowControl = false\n")
-                        if (fmlToml.isFile) {
-                            fmlToml.readLines().forEach { line ->
-                                // 剔除已有键，其余用户配置保留
-                                if (!line.trim().startsWith("earlyWindowControl")) {
-                                    append(line).append('\n')
+                    if (!fmlToml.isFile) {
+                        fmlToml.writeText("$disabledLine\n")
+                        return@runCatching
+                    }
+
+                    val lines = fmlToml.readLines()
+                    val keyLine = lines.find { it.trim().startsWith("earlyWindowControl") }
+                    if (keyLine == null) {
+                        fmlToml.writeText(
+                            lines.joinToString(separator = "\n", prefix = "$disabledLine\n", postfix = "\n")
+                        )
+                    } else {
+                        // 值可能带引号或行尾注释，取值前先截断
+                        val value = keyLine.substringAfter('=').substringBefore('#').trim().trim('"', '\'')
+                        if (value.equals("true", ignoreCase = true)) {
+                            // 仅改写该行的值，行内其余内容保留
+                            val fixedLine = keyLine.replaceFirst(Regex("true", RegexOption.IGNORE_CASE), "false")
+                            fmlToml.writeText(
+                                lines.joinToString(separator = "\n", postfix = "\n") { line ->
+                                    if (line == keyLine) fixedLine else line
                                 }
-                            }
+                            )
                         }
                     }
-                    fmlToml.writeText(merged)
                 }.onFailure {
                     Logger.warning(TAG, "Could not disable FML early loading screen!", it)
                 }
