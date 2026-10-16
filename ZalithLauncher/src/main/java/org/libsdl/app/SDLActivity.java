@@ -51,6 +51,7 @@ import androidx.appcompat.app.AlertDialog;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.movtery.zalithlauncher.bridge.ZLNativeInvoker;
 import com.movtery.zalithlauncher.game.sdl.SdlBridge;
 import com.movtery.zalithlauncher.ui.theme.NativeThemeUtilsKt;
 import com.movtery.zalithlauncher.utils.logging.Logger;
@@ -1931,15 +1932,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     public static boolean openURL(String url)
     {
         try {
-            Intent i = new Intent(Intent.ACTION_VIEW);
-            i.setData(Uri.parse(url));
-
-            int flags = Intent.FLAG_ACTIVITY_NO_HISTORY
-                      | Intent.FLAG_ACTIVITY_MULTIPLE_TASK
-                      | Intent.FLAG_ACTIVITY_NEW_DOCUMENT;
-            i.addFlags(flags);
-
-            mSingleton.startActivity(i);
+            ZLNativeInvoker.openLink(url);
         } catch (Exception ex) {
             return false;
         }
