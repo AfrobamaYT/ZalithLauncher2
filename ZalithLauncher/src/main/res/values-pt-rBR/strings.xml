@@ -1233,6 +1233,7 @@
     <string name="fm_import_file">Importar Arquivo</string>
     <string name="fm_import_dir">Importar Diretório</string>
     <string name="fm_import_empty">Nada para importar</string>
+    <string name="fm_browse_external">Navegar em Outros Gerenciadores</string>
     <string name="fm_sort_name">Nome</string>
     <string name="fm_sort_size">Tamanho</string>
     <string name="fm_sort_modified">Modificado</string>
