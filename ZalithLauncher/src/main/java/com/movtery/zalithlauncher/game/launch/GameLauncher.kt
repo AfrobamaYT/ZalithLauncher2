@@ -475,13 +475,21 @@ private fun setRendererEnv(envMap: MutableMap<String, String>, version: Version)
     renderer.getRendererEGL()?.let { eglName ->
         envMap["POJAVEXEC_EGL"] = eglName
 
-        // 指定 SDL EGL
-        val nativeLibPath = if (renderer is Plugin) {
-            renderer.getNativeLibPath()
+        val eglPath = if (eglName.startsWith("/")) {
+            // 路径不存在时不设置，交给 SDL 按自身默认解析
+            eglName
         } else {
-            PathManager.DIR_NATIVE_LIB
+            // eglName 已是绝对路径时直接使用，仅裸名拼接库目录
+            val nativeLibPath = if (renderer is Plugin) {
+                renderer.getNativeLibPath()
+            } else {
+                PathManager.DIR_NATIVE_LIB
+            }
+            "$nativeLibPath/$eglName"
         }
-        envMap["SDL_EGL_LIBRARY"] = "$nativeLibPath/$eglName"
+        if (eglPath.isNotEmpty() && File(eglPath).isFile()) {
+            envMap["SDL_EGL_LIBRARY"] = eglPath
+        }
     }
 
     envMap["POJAV_RENDERER"] = rendererId
