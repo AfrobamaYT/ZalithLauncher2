@@ -1454,4 +1454,6 @@
     <string name="saves_manage_export_failed">Ocorreu um erro ao compactar o arquivo do save</string>
     <string name="settings_renderer_max_refresh_rate_title">Solicitar os HZ máximos da tela</string>
     <string name="settings_renderer_max_refresh_rate_summary">Solicita que a tela mude para a taxa de HZ mais alta compatível com a resolução atual, removendo o limite de FPS em alguns dispositivos</string>
+    <string name="versions_config_renderer_reset_global">Redefinir para Global</string>
+    <string name="versions_config_renderer_reset_global_message">O Launcher descartará a configuração desta versão para %s e redefinirá para usar a configuração global. Esta ação não pode ser desfeita.</string>
 </resources>
