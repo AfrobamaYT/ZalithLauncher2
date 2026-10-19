@@ -31,3 +31,6 @@ LWJGL/*/build/
 .ampersand/
 
 .vscode/
+
+# PetLib Rust
+PetLib/rust/target/
