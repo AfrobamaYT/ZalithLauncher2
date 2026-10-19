@@ -1210,7 +1210,7 @@
     <string name="control_editor_edit_joystick_style_list_empty">Não há estilos de joystick no layout de controle atual</string>
     <string name="control_editor_edit_joystick_style_list_name">Nome do estilo do joystick</string>
     <string name="control_editor_edit_joystick_style_list_delete">Tem certeza de que deseja excluir o estilo de joystick mano? %s</string>
-    <string name="duration_format">%s Dias ou %s Horas ou %s Minutos</string>
+    <string name="duration_format">%s Dias e %s Horas e %s Minutos</string>
     <string name="saves_manage_playtime">Tempo jogado: %s</string>
     <string name="fm_initializing">Inicializando…</string>
     <string name="fm_init_failed">Falha na inicialização: %s</string>
