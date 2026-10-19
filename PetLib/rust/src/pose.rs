@@ -2,6 +2,7 @@
 //!
 //! 动画每帧绝对赋值各部件旋转与位置增量；
 //! 骨架额外叠加头部注视（追踪时含相机基准，静止时与身体对齐）。
+//! 注视含逐帧放弃规则：背对摄像机或头-身水平扭角超限时头部回正（均带迟滞）。
 //! 所有平滑均为帧率无关的指数平滑（alpha = 1 - exp(-dt/τ)）。
 
 use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
@@ -15,6 +16,27 @@ pub const TAU_GAZE: f32 = 0.10;
 pub const TAU_YAW: f32 = 0.15;
 pub const TAU_ANIM: f32 = 0.25;
 pub const TAU_RECENTER: f32 = 0.35;
+
+/// 背对切断阈值：偏航相对摄像机方向超过此角放弃跟随。
+const GAZE_OFF_YAW: f32 = 90f32.to_radians();
+/// 背对恢复阈值：拖回此角以内才恢复（迟滞）。
+const GAZE_ON_YAW: f32 = 75f32.to_radians();
+/// 过扭放弃阈值：头-身相对水平扭角超过此角放弃跟随。
+const GAZE_TWIST_OFF: f32 = 60f32.to_radians();
+/// 过扭恢复阈值（迟滞）。
+const GAZE_TWIST_ON: f32 = 50f32.to_radians();
+
+fn wrap_pi(angle: f32) -> f32 {
+    let two_pi = std::f32::consts::TAU;
+    let a = angle % two_pi;
+    if a > std::f32::consts::PI {
+        a - two_pi
+    } else if a < -std::f32::consts::PI {
+        a + two_pi
+    } else {
+        a
+    }
+}
 
 /// 相机正面基准偏航。
 /// 角色静止时头部以此角度朝向相机。
@@ -68,6 +90,10 @@ pub struct Skeleton {
 
     /// 平滑后的注视增量（弧度，水平 / 垂直）。
     gaze: Vec2,
+    /// 背对切断锁存：越过切断角置位，拖回恢复角以下复位。
+    gaze_yaw_cut: bool,
+    /// 过扭切断锁存：需求扭角越过放弃角置位，回到恢复角以内复位。
+    gaze_twist_cut: bool,
     model_yaw: f32,
     squash_start: Option<f32>,
 
@@ -102,7 +128,7 @@ impl Skeleton {
             tau_yaw: TAU_YAW,
             tau_anim: TAU_ANIM,
             tau_recenter: TAU_RECENTER,
-            head_range: Vec2::new(19.5f32.to_radians(), 53f32.to_radians()),
+            head_range: Vec2::new(60f32.to_radians(), 53f32.to_radians()),
             squash_depth: 5.,
             gaze_target: None,
             yaw_target: 0.,
@@ -111,6 +137,8 @@ impl Skeleton {
             blend_from: None,
             blend: 1.,
             gaze: Vec2::ZERO,
+            gaze_yaw_cut: false,
+            gaze_twist_cut: false,
             model_yaw: 0.,
             squash_start: None,
             arms: [Quat::IDENTITY; 2],
@@ -275,20 +303,49 @@ impl Skeleton {
 
         // 头部姿态：
         // 追踪中  世界空间解算指向输入点的朝向，受颈部活动范围截断，以 τ_gaze 平滑追随；
+        //        背对摄像机或头-身水平扭角超限时放弃跟随，头部回正到身体朝向。
         // 未追踪  与身体朝向对齐（仅动画摆动），以 τ_recenter 平滑回正。
         let parent = Quat::from_rotation_y(self.model_yaw);
-        let tracking = self.gaze_target.is_some() && self.head_follow();
-        let (head_target, tau) = if tracking {
-            let target = self.solve_gaze(view);
-            self.gaze += (target - self.gaze) * (1. - (-dt / self.tau_gaze).exp());
-            let head_world = view_quat()
-                * Quat::from_rotation_y(self.gaze.x)
-                * Quat::from_rotation_x(self.gaze.y)
-                * self.head_rot;
-            (parent.inverse() * head_world, self.tau_gaze)
-        } else {
-            self.gaze = Vec2::ZERO;
-            (self.head_rot, self.tau_recenter)
+        let (head_target, tau) = match self.gaze_target.filter(|_| self.head_follow()) {
+            Some(_) => {
+                let raw = self.solve_gaze(view);
+                // 背对切断（迟滞）：偏航相对摄像机方向（front_yaw），
+                // 不能以世界 0° 为基准，否则切口在视觉上左右不对称。
+                let facing = wrap_pi(self.model_yaw - front_yaw()).abs();
+                if facing > GAZE_OFF_YAW {
+                    self.gaze_yaw_cut = true;
+                } else if facing < GAZE_ON_YAW {
+                    self.gaze_yaw_cut = false;
+                }
+                // 过扭放弃（迟滞）：头-身相对水平扭角。
+                let twist = wrap_pi(raw.x - self.model_yaw).abs();
+                if twist > GAZE_TWIST_OFF {
+                    self.gaze_twist_cut = true;
+                } else if twist < GAZE_TWIST_ON {
+                    self.gaze_twist_cut = false;
+                }
+                if self.gaze_yaw_cut || self.gaze_twist_cut {
+                    self.gaze = Vec2::ZERO;
+                    (self.head_rot, self.tau_recenter)
+                } else {
+                    let target = Vec2::new(
+                        raw.x.clamp(-self.head_range.x, self.head_range.x),
+                        raw.y.clamp(-self.head_range.y, self.head_range.y),
+                    );
+                    self.gaze += (target - self.gaze) * (1. - (-dt / self.tau_gaze).exp());
+                    let head_world = view_quat()
+                        * Quat::from_rotation_y(self.gaze.x)
+                        * Quat::from_rotation_x(self.gaze.y)
+                        * self.head_rot;
+                    (parent.inverse() * head_world, self.tau_gaze)
+                }
+            }
+            None => {
+                self.gaze = Vec2::ZERO;
+                self.gaze_yaw_cut = false;
+                self.gaze_twist_cut = false;
+                (self.head_rot, self.tau_recenter)
+            }
         };
         self.head = self
             .head
@@ -329,7 +386,7 @@ impl Skeleton {
         }
     }
 
-    /// 以相机隐含距离解算指向光标的 yaw/pitch，并按颈部活动范围截断。
+    /// 以相机隐含距离解算指向光标的 yaw/pitch（未按颈部活动范围夹取）。
     fn solve_gaze(&self, view: Vec2) -> Vec2 {
         let Some(cursor) = self.gaze_target else {
             return Vec2::ZERO;
@@ -344,12 +401,8 @@ impl Skeleton {
         let unit = view.x / 44.;
         let dx = (cursor.x - p.x) / unit;
         let dy = (p.y - cursor.y) / unit;
-        let h = dx
-            .atan2(distance)
-            .clamp(-self.head_range.x, self.head_range.x);
-        let v = (-dy / (dx * dx + dy * dy + distance * distance).sqrt())
-            .asin()
-            .clamp(-self.head_range.y, self.head_range.y);
+        let h = dx.atan2(distance);
+        let v = (-dy / (dx * dx + dy * dy + distance * distance).sqrt()).asin();
         Vec2::new(h, v)
     }
 }
@@ -375,15 +428,114 @@ mod tests {
     }
 
     #[test]
-    fn gaze_respects_head_range() {
+    fn gaze_follows_directly_within_twist_limit() {
         let mut s = Skeleton::new();
         let view = Vec2::new(450., 525.);
-        // 光标远超水平活动范围，增量必须被截断。
-        s.set_gaze_target(Some(Vec2::new(5000., 525.)));
+        // 需求角在自然范围内：直接跟随，注视收敛到需求角本身。
+        s.set_gaze_target(Some(Vec2::new(920., 262.5)));
         for i in 0..600 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
-        assert!((s.gaze.x - s.head_range.x).abs() < 0.001);
+        let expected = s.solve_gaze(view);
+        assert!((s.gaze.x - expected.x).abs() < 0.001);
+    }
+
+    #[test]
+    fn gaze_abandons_beyond_twist_limit() {
+        let mut s = Skeleton::new();
+        let view = Vec2::new(450., 525.);
+        // 需求扭角远超自然范围：放弃跟随，头部回正到身体朝向。
+        s.set_gaze_target(Some(Vec2::new(5000., 262.5)));
+        for i in 0..600 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.gaze.length() < 0.001, "gaze = {:?}", s.gaze);
+        assert!(
+            s.head.abs_diff_eq(s.head_rot, 0.1),
+            "head must realign with body"
+        );
+    }
+
+    #[test]
+    fn back_facing_cuts_gaze_with_hysteresis() {
+        let mut s = Skeleton::new();
+        let view = Vec2::new(450., 525.);
+        s.set_gaze_target(Some(Vec2::new(920., 262.5)));
+        for i in 0..600 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        let expected = s.solve_gaze(view);
+        assert!((s.gaze.x - expected.x).abs() < 0.001);
+        // 背对：切断跟随，头部回正。
+        s.set_yaw_target(std::f32::consts::PI);
+        for i in 600..1200 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.gaze.length() < 0.001);
+        assert!(
+            s.head.abs_diff_eq(s.head_rot, 0.1),
+            "head must realign while back-facing"
+        );
+        // 拖回 105°（相对摄像机 82°，处于迟滞区间）：保持切断。
+        s.set_yaw_target(105f32.to_radians());
+        for i in 1200..1800 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(
+            s.gaze.length() < 0.001,
+            "hysteresis must hold within (75°, 90°) from camera"
+        );
+        // 回到正面：恢复跟随。
+        s.set_yaw_target(0.);
+        for i in 1800..2400 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        let expected = s.solve_gaze(view);
+        assert!((s.gaze.x - expected.x).abs() < 0.001);
+    }
+
+    #[test]
+    fn gaze_rules_mirror_for_rightward_turns() {
+        // 上述规则的镜像：身体向右转、光标在屏幕左侧，判定量级必须一致。
+        let mut s = Skeleton::new();
+        let view = Vec2::new(450., 525.);
+        // 需求角超夹角上限、未过扭：贴在负向夹角上限。
+        s.set_gaze_target(Some(Vec2::new(-443., 262.5)));
+        for i in 0..600 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        let expected = s.solve_gaze(view);
+        assert!((s.gaze.x - expected.x).abs() < 0.001);
+        // 需求扭角远超自然范围：放弃。
+        s.set_gaze_target(Some(Vec2::new(-4500., 262.5)));
+        for i in 600..1200 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.gaze.length() < 0.001, "gaze = {:?}", s.gaze);
+        // 光标回到可跟随位置，继续背对切断的验证。
+        s.set_gaze_target(Some(Vec2::new(-443., 262.5)));
+        // 背对（负方向）切断。
+        s.set_yaw_target(-std::f32::consts::PI);
+        for i in 1200..1800 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.gaze.length() < 0.001);
+        // 拖回 -60°（相对摄像机 -83°，处于迟滞区间）：保持切断。
+        s.set_yaw_target(-60f32.to_radians());
+        for i in 1800..2400 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(
+            s.gaze.length() < 0.001,
+            "hysteresis must hold within (-90°, -75°) from camera"
+        );
+        // 回到正面：恢复跟随，看向左侧光标。
+        s.set_yaw_target(0.);
+        for i in 2400..3000 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        let expected = s.solve_gaze(view);
+        assert!((s.gaze.x - expected.x).abs() < 0.001);
     }
 
     #[test]

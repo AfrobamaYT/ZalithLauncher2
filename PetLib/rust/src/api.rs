@@ -37,7 +37,6 @@ pub struct PetModel {
     frame: Frame,
     outer_layer: bool,
     super_sample: f32,
-    gaze_target: Option<Vec2>,
 }
 
 impl PetModel {
@@ -52,7 +51,6 @@ impl PetModel {
             frame: Frame::new(1, 1),
             outer_layer: true,
             super_sample: 2.,
-            gaze_target: None,
         })
     }
 
@@ -110,7 +108,8 @@ impl PetModel {
 
     /// 注视目标（视图像素坐标）。None 表示回正；
     pub fn set_gaze(&mut self, target: Option<(f32, f32)>) {
-        self.gaze_target = target.map(|(x, y)| Vec2::new(x, y));
+        self.skeleton
+            .set_gaze_target(target.map(|(x, y)| Vec2::new(x, y)));
     }
 
     pub fn set_model_yaw(&mut self, yaw: f32) {
@@ -159,7 +158,8 @@ impl PetModel {
         if width == 0 || height == 0 {
             return Ok(());
         }
-        self.skeleton.update(Vec2::new(width as f32, height as f32), now, dt);
+        self.skeleton
+            .update(Vec2::new(width as f32, height as f32), now, dt);
         self.lighting.prepare(&self.lighting_params);
         let fw = ((width as f32 * self.super_sample).round() as usize).max(1);
         let fh = ((height as f32 * self.super_sample).round() as usize).max(1);
@@ -256,7 +256,9 @@ mod tests {
             model.play_animation(AnimationId::Idle, 1., true);
             let mut buf = vec![0u8; w * h * 4];
             for i in 0..30 {
-                model.render(w, h, i as f32 / 60., 1. / 60., &mut buf).unwrap();
+                model
+                    .render(w, h, i as f32 / 60., 1. / 60., &mut buf)
+                    .unwrap();
             }
             buf
         };
@@ -294,7 +296,9 @@ mod tests {
         // 背面视角下披风完整可见。
         model.set_model_yaw(std::f32::consts::PI);
         for i in 0..180 {
-            model.render(w, h, i as f32 / 60., 1. / 60., &mut out).unwrap();
+            model
+                .render(w, h, i as f32 / 60., 1. / 60., &mut out)
+                .unwrap();
         }
         let blueish = out
             .chunks_exact(4)
@@ -305,18 +309,26 @@ mod tests {
 
     #[test]
     fn gaze_input_affects_head_over_frames() {
-        let mut model = test_model();
         let (w, h) = (225usize, 262usize);
+        let mut with_gaze = test_model();
+        let mut without = test_model();
+        with_gaze.set_gaze(Some((w as f32, 0.)));
         let mut out = vec![0u8; w * h * 4];
-        model.set_gaze(Some((w as f32, 0.)));
-        let mut head_quats = Vec::new();
-        for i in 0..90 {
-            model.render(w, h, i as f32 / 60., 1. / 60., &mut out).unwrap();
-            head_quats.push(model.skeleton.head);
+        for i in 0..120 {
+            with_gaze
+                .render(w, h, i as f32 / 60., 1. / 60., &mut out)
+                .unwrap();
+            without
+                .render(w, h, i as f32 / 60., 1. / 60., &mut out)
+                .unwrap();
         }
-        let first = head_quats[0];
-        let last = head_quats[head_quats.len() - 1];
-        assert!(!first.abs_diff_eq(last, 0.001), "gaze target must move the head");
+        assert!(
+            !with_gaze
+                .skeleton
+                .head
+                .abs_diff_eq(without.skeleton.head, 0.001),
+            "gaze target must move the head"
+        );
     }
 
     #[test]

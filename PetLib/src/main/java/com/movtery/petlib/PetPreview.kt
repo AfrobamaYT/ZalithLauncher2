@@ -3,6 +3,8 @@ package com.movtery.petlib
 import android.graphics.SurfaceTexture
 import android.view.TextureView
 import android.view.View
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -10,23 +12,60 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlin.math.PI
 
 /**
  * 玩家模型预览组件
+ *
+ * @param interactive 是否响应手势操作
  */
 @Composable
 fun PetPreview(
     controller: PetController,
     modifier: Modifier = Modifier,
+    interactive: Boolean = true,
 ) {
     var textureView by remember { mutableStateOf<TextureView?>(null) }
 
+    val gestureModifier = if (interactive) {
+        Modifier
+            .pointerInput(controller) {
+                detectTapGestures(
+                    onPress = { offset ->
+                        if (size.width > 0 && size.height > 0) {
+                            controller.hitTest(
+                                offset.x / size.width,
+                                offset.y / size.height
+                            ) { hit ->
+                                if (hit) {
+                                    // 命中模型像素立刻播放压扁动画
+                                    controller.squashTap(System.nanoTime() / 1_000_000_000f)
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+            .pointerInput(controller) {
+                // 整宽水平拖拽对应一整圈偏航
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    if (size.width > 0) {
+                        controller.rotateYaw(dragAmount.x / size.width * 2f * PI.toFloat())
+                    }
+                }
+            }
+    } else {
+        Modifier
+    }
+
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.then(gestureModifier),
         factory = { context ->
             TextureView(context).apply {
                 isOpaque = false

@@ -17,11 +17,23 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.PI
 
 private const val TAG = "PetLib"
 
 /** 连续锁画布失败达到该次数后，判定表面已失效并停止帧驱动 */
 private const val SURFACE_FAILURE_LIMIT = 10
+
+/** 归一化到 (-π, π]，供最短路径回正 */
+private fun wrapPi(angle: Float): Float {
+    val twoPi = (2 * PI).toFloat()
+    val a = angle % twoPi
+    return when {
+        a > PI.toFloat() -> a - twoPi
+        a < -PI.toFloat() -> a + twoPi
+        else -> a
+    }
+}
 
 /**
  * PetLib 控制器
@@ -29,9 +41,16 @@ private const val SURFACE_FAILURE_LIMIT = 10
  * 内部独占一个渲染线程；除 release 外所有方法都可从任意线程调用，
  * 实际的原生调用全部排队到该线程执行。释放后调用任何方法均为无操作。
  *
+ * @param skin 初始皮肤数据
+ * @param arm 手臂模型，null 自动检测
+ * @param defaultYaw 默认偏航角（弧度），回正回到该角度
  * @throws IllegalArgumentException 皮肤非法或解析失败
  */
-class PetController(skin: ByteArray, arm: ArmModel?) : AutoCloseable {
+class PetController(
+    skin: ByteArray,
+    arm: ArmModel?,
+    private val defaultYaw: Float = 0f
+) : AutoCloseable {
     private val thread = HandlerThread("PetLibRender").apply { start() }
     private val handler = Handler(thread.looper)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -41,6 +60,10 @@ class PetController(skin: ByteArray, arm: ArmModel?) : AutoCloseable {
 
     @Volatile
     private var released = false
+
+    // 偏航目标角的调用侧镜像，供增量旋转直接累加
+    @Volatile
+    private var yawTarget = 0f
 
     private var frameCallback: Choreographer.FrameCallback? = null
     private var bitmap: Bitmap? = null
@@ -53,6 +76,10 @@ class PetController(skin: ByteArray, arm: ArmModel?) : AutoCloseable {
     private val frameInFlight = AtomicBoolean(false)
     private val widthHint = AtomicInteger(0)
     private val heightHint = AtomicInteger(0)
+
+    init {
+        setModelYaw(defaultYaw)
+    }
 
     /**
      * 替换皮肤
@@ -169,7 +196,28 @@ class PetController(skin: ByteArray, arm: ArmModel?) : AutoCloseable {
 
     /** 整体偏航目标角（弧度） */
     fun setModelYaw(yaw: Float) {
+        yawTarget = yaw
         post { PetLibNative.nativeSetYaw(ptr, yaw) }
+    }
+
+    /**
+     * 在当前偏航目标角上叠加增量（弧度），供拖拽旋转
+     * @param delta 偏航增量（弧度）
+     */
+    fun rotateYaw(delta: Float) {
+        val next = yawTarget + delta
+        yawTarget = next
+        post { PetLibNative.nativeSetYaw(ptr, next) }
+    }
+
+    /** 回正：从当前姿态以最短路径转回默认偏航角 */
+    fun recenterYaw() {
+        post {
+            val current = PetLibNative.nativeGetYaw(ptr)
+            val next = current + wrapPi(defaultYaw - current)
+            yawTarget = next
+            PetLibNative.nativeSetYaw(ptr, next)
+        }
     }
 
     /** 查询当前偏航角，结果异步回到调用方的回调 */
