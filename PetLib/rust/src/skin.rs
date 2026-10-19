@@ -2,19 +2,21 @@
 
 use image::RgbaImage;
 
-/// 臂型：经典 4px 或纤细 3px。
+/// 手臂类型
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ArmModel {
+    /// 经典 4px
     Classic,
+    /// 纤细 3px
     Slim,
 }
 
 /// 单张模型纹理（皮肤或披风）。`colors` 与 `image` 像素一一平行，
-/// 存 RGB 三元组以加速逐像素着色查表。
+/// 存 RGBA 四元组以加速逐像素着色查表。
 #[derive(Clone)]
 pub struct Texture {
     pub image: RgbaImage,
-    pub colors: Vec<[u8; 3]>,
+    pub colors: Vec<[u8; 4]>,
 }
 
 impl Texture {
@@ -22,7 +24,7 @@ impl Texture {
         let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
             .map_err(|e| e.to_string())?
             .into_rgba8();
-        let colors = image.pixels().map(|p| [p[0], p[1], p[2]]).collect();
+        let colors = image.pixels().map(|p| [p[0], p[1], p[2], p[3]]).collect();
         Ok(Self { image, colors })
     }
 }
@@ -68,9 +70,8 @@ impl Skin {
         let mut image = image;
         let k = w / 64;
         if legacy {
-            let transparent = (0..16 * k).any(|y| {
-                (32 * k..64 * k).any(|x| image.get_pixel(x, y)[3] < 128)
-            });
+            let transparent =
+                (0..16 * k).any(|y| (32 * k..64 * k).any(|x| image.get_pixel(x, y)[3] < 128));
             if !transparent {
                 for y in 0..16 * k {
                     for x in 32 * k..64 * k {
@@ -91,7 +92,7 @@ impl Skin {
                 }
             }
         }
-        let colors = image.pixels().map(|p| [p[0], p[1], p[2]]).collect();
+        let colors = image.pixels().map(|p| [p[0], p[1], p[2], p[3]]).collect();
         Ok(Self {
             texture: Texture { image, colors },
             legacy,
@@ -100,7 +101,7 @@ impl Skin {
     }
 }
 
-/// 披风纹理：64×32 或等比例高清。
+/// 披风纹理：64×32 或等比例高清，上限与皮肤一致。
 pub fn load_cape(bytes: &[u8]) -> Result<Texture, String> {
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("Cape file must not exceed 8 MB.".into());
@@ -113,18 +114,23 @@ pub fn load_cape(bytes: &[u8]) -> Result<Texture, String> {
     }
     let w = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
     let h = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
-    if w < 64 || w % 64 != 0 || h * 2 != w {
-        return Err("Cape must be a 64×32 or proportional HD PNG.".into());
+    // 在解压任意输入前校验尺寸声明，拒绝解码炸弹。
+    if w < 64 || w > 1024 || w % 64 != 0 || h * 2 != w {
+        return Err("Cape must be a 64×32 or proportional HD PNG, up to 1024×512.".into());
     }
     Texture::decode(bytes)
 }
 
-/// slim 臂型检测（移植自 skinview-utils 的 inferModelType）：
-/// 检查经典 4px 臂型在 64×64 布局中的四块冗余透明条带——
-/// 任意一块含透明像素，或四块全为不透明纯黑/纯白，即判定纤细。
+/// slim 臂型自动检测
 fn detect_arm(image: &RgbaImage) -> ArmModel {
     let k = image.width() / 64;
-    let regions = [(50, 16, 2, 4), (54, 20, 2, 12), (42, 48, 2, 4), (46, 52, 2, 12)];
+    // 经典 4px 臂型在 64×64 布局中存在四块冗余条带（通常）
+    let regions = [
+        (50, 16, 2, 4),
+        (54, 20, 2, 12),
+        (42, 48, 2, 4),
+        (46, 52, 2, 12),
+    ];
     let mut all_black = true;
     let mut all_white = true;
     for &(x, y, w, h) in &regions {
@@ -205,5 +211,14 @@ mod tests {
     fn cape_rejects_skin_shapes() {
         // 64×64 不满足 2:1 披风比例，尺寸门直接拒绝。
         assert!(load_cape(&solid_png(64, 64, [255, 0, 0, 255])).is_err());
+    }
+
+    #[test]
+    fn cape_rejects_oversized_dimensions() {
+        // 只改尺寸声明即可触发上限检查，无需真实解码。
+        let mut png = solid_png(64, 32, [0, 0, 0, 255]);
+        png[16..20].copy_from_slice(&2048u32.to_be_bytes());
+        png[20..24].copy_from_slice(&1024u32.to_be_bytes());
+        assert!(load_cape(&png).is_err());
     }
 }

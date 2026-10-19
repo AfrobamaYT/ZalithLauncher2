@@ -29,12 +29,12 @@ pub enum Tex {
 
 #[derive(Clone)]
 pub(crate) struct BoxPart {
-    size: Vec3,
-    uv: Vec2,
-    transform: Mat4,
-    inflate: f32,
-    mirror: bool,
-    tex: Tex,
+    pub size: Vec3,
+    pub uv: Vec2,
+    pub transform: Mat4,
+    pub inflate: f32,
+    pub mirror: bool,
+    pub tex: Tex,
 }
 
 pub struct SceneParams<'a> {
@@ -45,48 +45,38 @@ pub struct SceneParams<'a> {
 
 pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
     let skin = scene.skin;
-    let aw = if skin.arm == ArmModel::Slim && !skin.legacy {
-        3.
-    } else {
-        4.
-    };
-    let hip = Mat4::from_translation(Vec3::Y * 12.);
-    let torso_m = hip
-        * Mat4::from_translation(Vec3::Y * pose.bob)
-        * Mat4::from_quat(pose.torso)
-        * Mat4::from_rotation_y(pose.body_yaw);
-    // 摆臂扭转只带动躯干与手臂；头部在扭转中保持注视目标。
-    let torso_steady = hip * Mat4::from_translation(Vec3::Y * pose.bob) * Mat4::from_quat(pose.torso);
+    let slim = skin.arm == ArmModel::Slim && !skin.legacy;
+    let aw = if slim { 3. } else { 4. };
+    // 各部件互为兄弟节点：躯干方块的旋转与位置增量不带动臂/腿/披风。
+    // 枢轴与几何偏移以模型像素为单位。
     let mut v: Vec<BoxPart> = Vec::with_capacity(13);
     {
-        let mut part = |transform: Mat4,
-                        size: Vec3,
-                        u: f32,
-                        w: f32,
-                        outer: Vec2,
-                        mirror: bool,
-                        hat: bool| {
-            v.push(BoxPart {
-                size,
-                uv: Vec2::new(u, w),
-                transform,
-                inflate: 0.,
-                mirror,
-                tex: Tex::Skin,
-            });
-            if scene.outer_layer && (!skin.legacy || hat) {
+        let mut part =
+            |transform: Mat4, size: Vec3, u: f32, w: f32, outer: Vec2, mirror: bool, hat: bool| {
                 v.push(BoxPart {
                     size,
-                    uv: outer,
+                    uv: Vec2::new(u, w),
                     transform,
-                    inflate: if hat { 1. } else { 0.5 },
+                    inflate: 0.,
                     mirror,
                     tex: Tex::Skin,
                 });
-            }
-        };
+                if scene.outer_layer && (!skin.legacy || hat) {
+                    v.push(BoxPart {
+                        size,
+                        uv: outer,
+                        transform,
+                        inflate: if hat { 1. } else { 0.5 },
+                        mirror,
+                        tex: Tex::Skin,
+                    });
+                }
+            };
+        // 躯干：部件原点即盒心（skin 0,-6,0 → 模型 0,18,0），旋转绕盒心。
         part(
-            torso_m * Mat4::from_translation(Vec3::new(0., 6., 0.)),
+            Mat4::from_translation(Vec3::new(0., 18., 0.) + pose.body_pos)
+                * Mat4::from_quat(pose.body_rot)
+                * Mat4::from_rotation_y(pose.body_yaw),
             Vec3::new(8., 12., 4.),
             16.,
             16.,
@@ -94,8 +84,9 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
             false,
             false,
         );
+        // 头部：枢轴在颈部（模型 0,24,0），盒心上移 4。
         part(
-            torso_steady * Mat4::from_translation(Vec3::Y * 12.)
+            Mat4::from_translation(Vec3::new(0., 24. + pose.head_pos, 0.))
                 * Mat4::from_quat(pose.head)
                 * Mat4::from_translation(Vec3::Y * 4.),
             Vec3::splat(8.),
@@ -108,10 +99,12 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
         for side in 0..2 {
             let left = side == 0;
             let sign = if left { 1. } else { -1. };
-            let tr = torso_m
-                * Mat4::from_translation(Vec3::new(sign * (4. + aw / 2.), 10., 0.))
+            // 臂：部件原点 (∓5,22,0)（肩点，盒顶下方 2），枢轴组内偏移
+            // (∓1,−4,0)（纤细 ∓0.5），盒心挂在枢轴上。
+            let pivot_x = if slim { 0.5 } else { 1. };
+            let tr = Mat4::from_translation(Vec3::new(sign * 5., 22., 0.))
                 * Mat4::from_quat(pose.arms[side])
-                * Mat4::from_translation(Vec3::new(0., -4., 0.));
+                * Mat4::from_translation(Vec3::new(sign * pivot_x, -4., 0.));
             let (u, w, outer) = if left && !skin.legacy {
                 (32., 48., Vec2::new(48., 48.))
             } else {
@@ -130,8 +123,8 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
         for side in 0..2 {
             let left = side == 0;
             let sign = if left { 1. } else { -1. };
-            let tr = hip
-                * Mat4::from_translation(Vec3::new(sign * 2., 0., 0.))
+            // 腿：部件原点 (∓1.9,12,−0.1)（髋点），枢轴组内偏移 (0,−6,0)。
+            let tr = Mat4::from_translation(Vec3::new(sign * 1.9, 12., -0.1))
                 * Mat4::from_quat(pose.legs[side])
                 * Mat4::from_translation(Vec3::new(0., -6., 0.));
             let (u, w, outer) = if left && !skin.legacy {
@@ -150,16 +143,18 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
             );
         }
     }
-    // 披风：背挂平面盒，顶部为摆动枢轴。uv (0,0) 展开条带的前脸即 (1,1)，
-    // 与原版披风纹理布局一致。
+    // 披风：部件原点 (0,24,−2)，mesh 偏移 (0,−8,+0.5)；rotation.y 恒为 π
     if scene.cape.is_some() {
         v.push(BoxPart {
             size: Vec3::new(10., 16., 1.),
             uv: Vec2::ZERO,
-            transform: torso_steady
-                * Mat4::from_translation(Vec3::new(0., 11., -2.75))
-                * Mat4::from_quat(pose::rotation(pose.cape.x, 0., pose.cape.y))
-                * Mat4::from_translation(Vec3::new(0., -8., 0.)),
+            transform: Mat4::from_translation(Vec3::new(0., 24., -2.))
+                * Mat4::from_quat(pose::rotation(
+                    pose.cape.x,
+                    std::f32::consts::PI,
+                    pose.cape.y,
+                ))
+                * Mat4::from_translation(Vec3::new(0., -8., 0.5)),
             inflate: 0.,
             mirror: false,
             tex: Tex::Cape,
@@ -391,15 +386,15 @@ impl Frame {
                 let yy = (ty as u32).min(tex.image.height() - 1);
                 let ti = (yy * tex.image.width() + xx) as usize;
                 let base = &tex.colors[ti];
+                if base[3] < 16 {
+                    continue;
+                }
+                let alpha = base[3];
                 let color = [
                     lut[0][base[0] as usize],
                     lut[1][base[1] as usize],
                     lut[2][base[2] as usize],
                 ];
-                let alpha = tex.image.get_pixel(xx, yy)[3];
-                if alpha < 16 {
-                    continue;
-                }
                 let off = i * 4;
                 if alpha == 255 {
                     self.pixels[off..off + 4].copy_from_slice(&[color[2], color[1], color[0], 255]);
@@ -447,8 +442,8 @@ impl Frame {
                     let mut acc = [0u32; 4];
                     let mut total = 0u32;
                     for (dy, &wy) in row.factors.iter().enumerate() {
-                        let src =
-                            self.pixels[(row.start + dy) * self.width * 4 + col.start * 4..].as_ptr();
+                        let src = self.pixels[(row.start + dy) * self.width * 4 + col.start * 4..]
+                            .as_ptr();
                         for (dx, &wx) in col.factors.iter().enumerate() {
                             let weight = wx * wy;
                             total += weight;
@@ -479,13 +474,12 @@ impl Frame {
                     for x in 0..w {
                         let sx = x * self.width / w;
                         let src = (sy * self.width + sx) * 4;
-                        out[dst_off + x * 4..dst_off + x * 4 + 4]
-                            .copy_from_slice(&[
-                                self.pixels[src + 2],
-                                self.pixels[src + 1],
-                                self.pixels[src],
-                                self.pixels[src + 3],
-                            ]);
+                        out[dst_off + x * 4..dst_off + x * 4 + 4].copy_from_slice(&[
+                            self.pixels[src + 2],
+                            self.pixels[src + 1],
+                            self.pixels[src],
+                            self.pixels[src + 3],
+                        ]);
                     }
                 }
             }
@@ -541,7 +535,10 @@ mod tests {
                     covered[entry.start + j] += factor as u64;
                 }
             }
-            assert!(covered.iter().all(|&c| c == 256), "{src}->{dst}: {covered:?}");
+            assert!(
+                covered.iter().all(|&c| c == 256),
+                "{src}->{dst}: {covered:?}"
+            );
         }
     }
 
@@ -552,7 +549,11 @@ mod tests {
         for y in 0..4 {
             for x in 0..4 {
                 let off = (y * 4 + x) * 4;
-                let v = if y < 2 { [0, 0, 255, 255] } else { [0, 0, 128, 128] };
+                let v = if y < 2 {
+                    [0, 0, 255, 255]
+                } else {
+                    [0, 0, 128, 128]
+                };
                 frame.pixels[off..off + 4].copy_from_slice(&v);
             }
         }

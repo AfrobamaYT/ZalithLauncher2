@@ -1,6 +1,4 @@
-//! PetLib 高层接口：宿主（Kotlin/JNI）持有的完整渲染模型。
-//!
-//! 单线程约定：实例只允许在宿主的渲染线程上创建、更新与渲染。
+//! PetLib 接口
 
 use glam::Vec2;
 
@@ -111,7 +109,6 @@ impl PetModel {
     }
 
     /// 注视目标（视图像素坐标）。None 表示回正；
-    /// 输入策略（鼠标判定、10 秒规则）由宿主完成后再传入。
     pub fn set_gaze(&mut self, target: Option<(f32, f32)>) {
         self.gaze_target = target.map(|(x, y)| Vec2::new(x, y));
     }
@@ -132,18 +129,19 @@ impl PetModel {
         self.skeleton.stop_animation();
     }
 
-    /// 点按压扁（与原版键盘按压同脉冲曲线）。
+    /// 点按压扁。
     pub fn squash_tap(&mut self, now: f32) {
         self.skeleton.squash_tap(now);
     }
 
-    /// 攻击摆臂（保留特性，宿主暂不接线）。
+    /// 攻击摆臂。
     pub fn play_swing(&mut self, now: f32) {
         self.skeleton.click(now);
     }
 
     /// 渲染一帧到 `out`（预乘 RGBA，长度须为 width*height*4）。
-    /// `now`/`dt` 由宿主时钟驱动；`dt` 为距上一帧的秒数。
+    /// `now`/`dt` 由宿主时钟驱动。
+    /// `dt` 为距上一帧的秒数。
     pub fn render(
         &mut self,
         width: usize,
@@ -190,6 +188,37 @@ impl PetModel {
         let py = ((y * self.frame.height as f32) as usize).min(self.frame.height - 1);
         self.frame.pixels[(py * self.frame.width + px) * 4 + 3] != 0
     }
+
+    /// 调试：当前帧各部件的种类（"skin"/"cape"）、尺寸与列主序变换矩阵。
+    pub fn debug_part_transforms(&self) -> Vec<PartTransform> {
+        let parts = render::parts(
+            &self.skeleton,
+            &render::SceneParams {
+                skin: &self.skin,
+                cape: self.cape.as_ref(),
+                outer_layer: self.outer_layer,
+            },
+        );
+        parts
+            .iter()
+            .map(|p| PartTransform {
+                kind: match p.tex {
+                    render::Tex::Skin => "skin",
+                    render::Tex::Cape => "cape",
+                }
+                .to_string(),
+                size: p.size.to_array(),
+                matrix: p.transform.to_cols_array(),
+            })
+            .collect()
+    }
+}
+
+/// 调试用部件变换快照。
+pub struct PartTransform {
+    pub kind: String,
+    pub size: [f32; 3],
+    pub matrix: [f32; 16],
 }
 
 #[cfg(test)]

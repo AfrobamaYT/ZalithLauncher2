@@ -32,5 +32,3 @@ LWJGL/*/build/
 
 .vscode/
 
-# PetLib Rust
-PetLib/rust/target/

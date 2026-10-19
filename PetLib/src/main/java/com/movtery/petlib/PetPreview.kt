@@ -1,0 +1,109 @@
+package com.movtery.petlib
+
+import android.graphics.SurfaceTexture
+import android.view.TextureView
+import android.view.View
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+
+/**
+ * 玩家模型预览组件
+ */
+@Composable
+fun PetPreview(
+    controller: PetController,
+    modifier: Modifier = Modifier,
+) {
+    var textureView by remember { mutableStateOf<TextureView?>(null) }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            TextureView(context).apply {
+                isOpaque = false
+                textureView = this
+            }
+        }
+    )
+
+    DisposableEffect(controller, textureView) {
+        val view = textureView
+        if (view == null) {
+            onDispose { }
+        } else {
+            val listener = SurfaceLifecycle(controller)
+            view.surfaceTextureListener = listener
+            // 视图附着即渲染、分离即停止：窗口分离时宿主会废弃底层缓冲队列，
+            // 该信号不依赖导航实现与生命周期分发，是停帧的最后防线。
+            val attachStateListener = object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {
+                    val st = (v as? TextureView)?.surfaceTexture ?: return
+                    controller.attachSurface(st, v.width, v.height)
+                }
+
+                override fun onViewDetachedFromWindow(v: View) {
+                    controller.detachSurface()
+                }
+            }
+            view.addOnAttachStateChangeListener(attachStateListener)
+            // 视图复用时 SurfaceTexture 可能已就绪，直接补挂。
+            view.surfaceTexture?.let { st ->
+                listener.onSurfaceTextureAvailable(st, view.width, view.height)
+            }
+            onDispose {
+                view.removeOnAttachStateChangeListener(attachStateListener)
+                view.surfaceTextureListener = null
+                controller.detachSurface()
+            }
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, controller, textureView) {
+        val observer = LifecycleEventObserver { _, event ->
+            val view = textureView ?: return@LifecycleEventObserver
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> {
+                    controller.detachSurface()
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    val st = view.surfaceTexture ?: return@LifecycleEventObserver
+                    controller.attachSurface(st, view.width, view.height)
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+}
+
+private class SurfaceLifecycle(private val controller: PetController) :
+    TextureView.SurfaceTextureListener {
+    override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+        controller.attachSurface(st, width, height)
+    }
+
+    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {
+        controller.updateSurfaceSize(width, height)
+    }
+
+    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+        controller.detachSurface()
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
+}

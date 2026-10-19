@@ -1,4 +1,4 @@
-//! 方向光照：朗伯明暗带 + sRGB 精确的量化查表着色。
+//! 方向光照，朗伯明暗带 + sRGB 精确的量化查表着色。
 
 use glam::Vec3;
 
@@ -45,10 +45,7 @@ impl Lighting {
         let up = forward.cross(right);
         let az = p.azimuth.to_radians();
         let el = p.elevation.to_radians();
-        self.direction = (forward * (el.cos() * az.cos())
-            + right * (el.cos() * az.sin())
-            + up * el.sin())
-        .normalize();
+        self.direction = (forward * (el.cos() * az.cos()) + right * (el.cos() * az.sin()) + up * el.sin()).normalize();
         // 柔和度将朗伯明暗带的对比向平灰收敛。
         self.contrast = 2.6 + (0.6 - 2.6) * (p.softness / 100.).clamp(0., 1.);
         self.brightness = p.brightness / 100.;

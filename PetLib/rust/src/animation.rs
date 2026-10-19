@@ -1,33 +1,60 @@
-//! 循环动画预设的逐帧求值。
-//!
-//! 全部为正弦周期函数，天然循环。角度为相对于静止姿态的欧拉偏移（弧度），
-//! 由骨架层叠加到部件的静止姿态上。左臂/左腿为 side 0（+X）。
-
-use glam::{Vec2, Vec3};
+use glam::Vec3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AnimationId {
-    /// 呼吸待机（转写自启动器原 skinview3d 集成的自定义 NewIdle）。
+    /// 待机
     Idle,
-    /// 行走（转写自 skinview3d 的 WalkingAnimation）。
+    /// 行走
     Walking,
 }
 
-/// 单帧动画偏移。
-#[derive(Clone, Copy, Default)]
+/// 单帧动画姿态
+/// 所有欧拉角为绝对值，弧度 (x, y, z)，XYZ 序
+#[derive(Clone, Copy)]
 pub struct AnimFrame {
-    /// 躯干（相对髋部）欧拉偏移。
-    pub torso: Vec3,
-    /// 头部摆动欧拉偏移。
-    pub head_sway: Vec3,
-    /// 双臂欧拉偏移 [左, 右]。
+    /// 躯干方块欧拉旋转。
+    pub body_rot: Vec3,
+    /// 头部欧拉旋转。
+    pub head_rot: Vec3,
+    /// 双臂欧拉旋转 [左, 右]。
     pub arms: [Vec3; 2],
-    /// 双腿欧拉偏移 [左, 右]。
+    /// 双腿欧拉旋转 [左, 右]。
     pub legs: [Vec3; 2],
-    /// 上半身（躯干组）竖直位移，模型像素单位。
-    pub bob: f32,
-    /// 披风欧拉偏移 (x, z)。
-    pub cape: Vec2,
+    /// 躯干方块位置增量。
+    pub body_pos: Vec3,
+    /// 头部位置增量（仅 y）。
+    pub head_pos: f32,
+    /// 披风欧拉 x。
+    pub cape_x: f32,
+    /// 披风欧拉 z。
+    /// None 表示不触碰骨架当前值。
+    pub cape_z: Option<f32>,
+}
+
+impl AnimFrame {
+    /// resetJoints 等价的静止姿态
+    pub fn rest() -> Self {
+        Self {
+            cape_x: std::f32::consts::PI * 0.06,
+            cape_z: Some(0.),
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for AnimFrame {
+    fn default() -> Self {
+        Self {
+            body_rot: Vec3::ZERO,
+            head_rot: Vec3::ZERO,
+            arms: [Vec3::ZERO; 2],
+            legs: [Vec3::ZERO; 2],
+            body_pos: Vec3::ZERO,
+            head_pos: 0.,
+            cape_x: 0.,
+            cape_z: Some(0.),
+        }
+    }
 }
 
 /// t 为累计动画时间（秒，已含速度缩放）。
@@ -39,38 +66,45 @@ pub fn evaluate(id: AnimationId, t: f32) -> AnimFrame {
 }
 
 /// 待机动画，参考 Modrinth 启动器的呼吸待机动画。
+/// https://github.com/modrinth/code/blob/e71a8c10fac3eda05ff9bc34381178f3d11c41de/packages/assets/models/slim-player.gltf#L1653-L1755
 fn idle(t: f32) -> AnimFrame {
     let wave1 = (t * std::f32::consts::TAU * 0.3).sin();
     let wave2 = (t * std::f32::consts::TAU * 0.25).sin() * 0.3;
     let normalized = ((wave1 + wave2 + 1.3) / 2.6).clamp(0., 1.);
+    let bob = (t * 2.2).sin() * -0.1;
     let arm_x = (t * 2.2).sin() * 0.05;
-    // 原实现：rightArm.z = armZ（负值），leftArm.z = -armZ，双臂对称外张。
+    // 双臂 z 分量关于 0 对称，形成对称外张。
     let arm_z = ((t * 1.8).sin() + 1.) / 2. * -0.05;
     AnimFrame {
-        torso: Vec3::new((t * 2.2).sin() * 0.02, 0., (t * 1.5).sin() * 0.01),
-        head_sway: Vec3::new(
+        body_rot: Vec3::new((t * 2.2).sin() * 0.02, 0., (t * 1.5).sin() * 0.01),
+        head_rot: Vec3::new(
             (t * 2.2).sin() * 0.04,
             (t * 0.6).sin() * 0.1,
             (t * 1.5).sin() * 0.01,
         ),
         arms: [Vec3::new(arm_x, 0., -arm_z), Vec3::new(arm_x, 0., arm_z)],
         legs: [Vec3::ZERO; 2],
-        bob: (t * 2.2).sin() * -0.1,
-        cape: Vec2::new(
-            0.15 + normalized * 0.15,
-            0.03 + ((t * std::f32::consts::TAU * 0.35).sin() + 1.) / 2. * 0.03,
-        ),
+        // 躯干与头部在呼吸 bob 之外各带 −0.1 的永久下沉。
+        body_pos: Vec3::new(0., bob - 0.1, 0.),
+        head_pos: bob - 0.1,
+        cape_x: 0.15 + normalized * 0.15,
+        cape_z: Some(0.03 + ((t * std::f32::consts::TAU * 0.35).sin() + 1.) / 2. * 0.03),
     }
 }
 
-/// WalkingAnimation：t = progress * 8。
+/// 行走动画，移植 skinview3d 的 WalkingAnimation
+/// https://github.com/bs-community/skinview3d/blob/9b8d22d/src/animation.ts#L153
 fn walking(t: f32) -> AnimFrame {
     const ARM_Z: f32 = std::f32::consts::PI * 0.02;
     AnimFrame {
-        torso: Vec3::ZERO,
-        head_sway: Vec3::new((t / 5.).sin() * 0.1, (t / 4.).sin() * 0.2, 0.),
+        body_rot: Vec3::ZERO,
+        head_rot: Vec3::new((t / 5.).sin() * 0.1, (t / 4.).sin() * 0.2, 0.),
         arms: [
-            Vec3::new((t + std::f32::consts::PI).sin() * 0.5, 0., t.cos() * 0.03 + ARM_Z),
+            Vec3::new(
+                (t + std::f32::consts::PI).sin() * 0.5,
+                0.,
+                t.cos() * 0.03 + ARM_Z,
+            ),
             Vec3::new(
                 t.sin() * 0.5,
                 0.,
@@ -81,8 +115,10 @@ fn walking(t: f32) -> AnimFrame {
             Vec3::new(t.sin() * 0.5, 0., 0.),
             Vec3::new((t + std::f32::consts::PI).sin() * 0.5, 0., 0.),
         ],
-        bob: 0.,
-        cape: Vec2::new((t / 1.5).sin() * 0.06 + std::f32::consts::PI * 0.06, 0.),
+        body_pos: Vec3::ZERO,
+        head_pos: 0.,
+        cape_x: (t / 1.5).sin() * 0.06 + std::f32::consts::PI * 0.06,
+        cape_z: None,
     }
 }
 
@@ -103,10 +139,13 @@ mod tests {
     fn idle_offsets_stay_small() {
         for i in 0..600 {
             let f = evaluate(AnimationId::Idle, i as f32 / 60.);
-            assert!(f.head_sway.x.abs() <= 0.05);
-            assert!(f.head_sway.y.abs() <= 0.11);
-            assert!(f.bob.abs() <= 0.11);
-            assert!(f.cape.x >= 0.15 - 0.001 && f.cape.x <= 0.31);
+            assert!(f.head_rot.x.abs() <= 0.05);
+            assert!(f.head_rot.y.abs() <= 0.11);
+            // bob − 0.1：范围 [−0.2, 0]（含常量下沉项）。
+            assert!((-0.21..=0.0).contains(&f.body_pos.y));
+            assert!((-0.21..=0.0).contains(&f.head_pos));
+            assert!(f.cape_x >= 0.15 - 0.001 && f.cape_x <= 0.31);
+            assert!(f.cape_z.is_some());
         }
     }
 
@@ -116,5 +155,15 @@ mod tests {
         let f = evaluate(AnimationId::Walking, std::f32::consts::FRAC_PI_2 / 8.);
         assert!(f.legs[0].x > 0.4);
         assert!(f.arms[0].x < -0.4);
+    }
+
+    #[test]
+    fn walking_uses_absolute_z_without_rest_splay() {
+        // 行走时手臂 z 分量是绝对值（约 ±0.063 弧度内），不含站姿外张。
+        for i in 0..240 {
+            let f = evaluate(AnimationId::Walking, i as f32 / 60.);
+            assert!(f.arms[0].z.abs() < 0.1, "{}", f.arms[0].z);
+            assert!(f.arms[1].z.abs() < 0.1);
+        }
     }
 }
