@@ -1556,6 +1556,15 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             }
         }
 
+        //实体键盘退格落地到编辑器，由差量转发统一产生游戏退格：
+        //否则游戏侧删除而编辑器镜像未同步，后续差量转发会错位
+        if (keyCode == KeyEvent.KEYCODE_DEL && ic != null && SdlImeController.isInputAccepted()) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                ic.deleteSurroundingText(1, 0);
+            }
+            return true;
+        }
+
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             onNativeKeyDown(keyCode);
 
