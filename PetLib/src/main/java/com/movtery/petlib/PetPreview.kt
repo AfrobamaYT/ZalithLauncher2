@@ -1,6 +1,7 @@
 package com.movtery.petlib
 
 import android.graphics.SurfaceTexture
+import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -30,8 +31,6 @@ fun PetPreview(
     modifier: Modifier = Modifier,
     interactive: Boolean = true,
 ) {
-    var textureView by remember { mutableStateOf<TextureView?>(null) }
-
     val gestureModifier = if (interactive) {
         Modifier
             .pointerInput(controller) {
@@ -64,6 +63,7 @@ fun PetPreview(
         Modifier
     }
 
+    var textureView by remember { mutableStateOf<TextureView?>(null) }
     AndroidView(
         modifier = modifier.then(gestureModifier),
         factory = { context ->
@@ -79,14 +79,14 @@ fun PetPreview(
         if (view == null) {
             onDispose { }
         } else {
-            val listener = SurfaceLifecycle(controller)
+            val listener = TextureLifecycle(controller)
             view.surfaceTextureListener = listener
             // 视图附着即渲染、分离即停止：窗口分离时宿主会废弃底层缓冲队列，
             // 该信号不依赖导航实现与生命周期分发，是停帧的最后防线。
             val attachStateListener = object : View.OnAttachStateChangeListener {
                 override fun onViewAttachedToWindow(v: View) {
                     val st = (v as? TextureView)?.surfaceTexture ?: return
-                    controller.attachSurface(st, v.width, v.height)
+                    listener.ensureAttached(st, v.width, v.height)
                 }
 
                 override fun onViewDetachedFromWindow(v: View) {
@@ -96,7 +96,7 @@ fun PetPreview(
             view.addOnAttachStateChangeListener(attachStateListener)
             // 视图复用时 SurfaceTexture 可能已就绪，直接补挂。
             view.surfaceTexture?.let { st ->
-                listener.onSurfaceTextureAvailable(st, view.width, view.height)
+                listener.ensureAttached(st, view.width, view.height)
             }
             onDispose {
                 view.removeOnAttachStateChangeListener(attachStateListener)
@@ -116,7 +116,11 @@ fun PetPreview(
                 }
                 Lifecycle.Event.ON_RESUME -> {
                     val st = view.surfaceTexture ?: return@LifecycleEventObserver
-                    controller.attachSurface(st, view.width, view.height)
+                    view.surfaceTextureListener?.let { listener ->
+                        (listener as? TextureLifecycle)?.ensureAttached(
+                            st, view.width, view.height
+                        )
+                    }
                 }
                 else -> Unit
             }
@@ -129,10 +133,24 @@ fun PetPreview(
     }
 }
 
-private class SurfaceLifecycle(private val controller: PetController) :
+private class TextureLifecycle(private val controller: PetController) :
     TextureView.SurfaceTextureListener {
+    private var surface: Surface? = null
+
+    fun ensureAttached(st: SurfaceTexture, width: Int, height: Int) {
+        val existing = surface
+        if (existing != null) {
+            controller.attachSurface(existing, width, height)
+        } else {
+            Surface(st).let { wrapped ->
+                surface = wrapped
+                controller.attachSurface(wrapped, width, height)
+            }
+        }
+    }
+
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-        controller.attachSurface(st, width, height)
+        ensureAttached(st, width, height)
     }
 
     override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {
@@ -141,6 +159,8 @@ private class SurfaceLifecycle(private val controller: PetController) :
 
     override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
         controller.detachSurface()
+        surface?.release()
+        surface = null
         return true
     }
 

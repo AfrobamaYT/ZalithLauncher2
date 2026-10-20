@@ -4,15 +4,14 @@ import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
-import android.graphics.SurfaceTexture
-import android.util.Log
-import android.view.Choreographer
-import android.view.Surface
-import android.view.TextureView
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.util.Log
+import android.view.Choreographer
+import android.view.Surface
 import androidx.annotation.FloatRange
+import androidx.core.graphics.createBitmap
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -67,8 +66,10 @@ class PetController(
     private var yawTarget = 0f
 
     private var frameCallback: Choreographer.FrameCallback? = null
-    private var bitmap: Bitmap? = null
-    private var buffer: ByteBuffer? = null
+    // 双缓冲：光栅写后台缓冲，提交展示前台缓冲，锁画布的等待期不再把
+    // 光栅时间串联进提交关键路径
+    private var backBuffer: FrameBuffer? = null
+    private var frontBuffer: FrameBuffer? = null
     // 位图以 SRC 模式整幅覆写画布，透明区域随位图零像素一并替换，
     // 免去提交前对旧内容做全画布清屏的额外一遍操作
     private val overwritePaint = Paint().apply {
@@ -77,7 +78,12 @@ class PetController(
     private var surfaceFailures = 0
     private var lastRenderNanos = 0L
     private var lastSlowLogNanos = 0L
-    private var attachedTexture: SurfaceTexture? = null
+    private var lastProfileLogNanos = 0L
+    private var lockNanosAccum = 0L
+    private var renderNanosAccum = 0L
+    private var presentNanosAccum = 0L
+    private var profileFrames = 0
+    private var attachedSurface: Surface? = null
     private val surfaceRef = AtomicReference<Surface?>(null)
     private val frameInFlight = AtomicBoolean(false)
     private val widthHint = AtomicInteger(0)
@@ -273,21 +279,21 @@ class PetController(
     }
 
     /** 渲染循环控制 */
-    internal fun attachSurface(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+    internal fun attachSurface(surface: Surface, width: Int, height: Int) {
         // surface 生命周期全部排队到渲染线程执行，与逐帧回调串行，
         // 避免一帧正持有旧surface 时它被另一线程释放。
         post {
             widthHint.set(width)
             heightHint.set(height)
-            // 视图附着监听、纹理回调与生命周期恢复会在进入画面时接连触发，
-            // 同一纹理的重复附着不再重复包裹 surface
-            if (attachedTexture === surfaceTexture && surfaceRef.get() != null) {
+            // 视图附着、surface 创建与尺寸变化回调会接连触发，
+            // 同一 surface 的重复附着不再重复登记
+            if (attachedSurface === surface && surfaceRef.get() != null) {
                 startFrameLoop()
                 return@post
             }
-            val previous = surfaceRef.getAndSet(Surface(surfaceTexture))
-            previous?.release()
-            attachedTexture = surfaceTexture
+            // surface 由宿主视图持有，这里只借用，不负责释放
+            surfaceRef.set(surface)
+            attachedSurface = surface
             surfaceFailures = 0
             lastRenderNanos = 0L
             startFrameLoop()
@@ -301,9 +307,8 @@ class PetController(
 
     internal fun detachSurface() {
         post {
-            surfaceRef.getAndSet(null)?.let {
-                it.release()
-                attachedTexture = null
+            if (surfaceRef.getAndSet(null) != null) {
+                attachedSurface = null
             }
             stopFrameLoop()
         }
@@ -318,12 +323,12 @@ class PetController(
             frameCallback = null
         }
         handler.post {
-            surfaceRef.getAndSet(null)?.release()
-            attachedTexture = null
+            surfaceRef.set(null)
+            attachedSurface = null
             PetLibNative.nativeDestroy(ptr)
             ptr = 0
-            bitmap = null
-            buffer = null
+            backBuffer = null
+            frontBuffer = null
         }
         handler.looper.quitSafely()
     }
@@ -371,7 +376,7 @@ class PetController(
         surfaceFailures++
         if (surfaceFailures >= SURFACE_FAILURE_LIMIT && surfaceRef.compareAndSet(surface, null)) {
             // 连续失败判定废弃并停帧
-            surface.release()
+            attachedSurface = null
             stopFrameLoop()
             Log.w(TAG, "Surface unusable after $surfaceFailures consecutive failures; frame loop stopped")
         }
@@ -394,6 +399,7 @@ class PetController(
 
         // surface 被系统侧失效时，lockCanvas 可能抛异常，也可能只返回 null 并由
         // native 层打印错误。先锁画布再渲染，失败帧不产生渲染开销。
+        val lockStartNanos = System.nanoTime()
         val canvas = try {
             surface.lockCanvas(null)
         } catch (_: IllegalStateException) {
@@ -406,21 +412,30 @@ class PetController(
             onSurfaceFailure(surface)
             return
         }
+        lockNanosAccum += System.nanoTime() - lockStartNanos
+        val renderStartNanos = System.nanoTime()
         try {
-            var target = bitmap
-            var output = buffer
-            if (target == null || output == null || target.width != width || target.height != height) {
-                target = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                output = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
-                bitmap = target
-                buffer = output
+            var back = backBuffer
+            if (back == null || back.bitmap.width != width || back.bitmap.height != height) {
+                back = FrameBuffer(
+                    createBitmap(width, height),
+                    ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+                )
+                backBuffer = back
             }
-            output.rewind()
-            PetLibNative.nativeRender(ptr, width, height, startedNanos / 1_000_000_000f, dt, output)
-            output.rewind()
-            target.copyPixelsFromBuffer(output)
-            canvas.drawBitmap(target, 0f, 0f, overwritePaint)
+            back.buffer.rewind()
+            PetLibNative.nativeRender(ptr, width, height, startedNanos / 1_000_000_000f, dt, back.buffer)
+            back.buffer.rewind()
+            back.bitmap.copyPixelsFromBuffer(back.buffer)
+            renderNanosAccum += System.nanoTime() - renderStartNanos
+            // 交换：刚完成的帧转为待提交，旧的前台缓冲留给下一轮光栅
+            val previousFront = frontBuffer
+            frontBuffer = back
+            backBuffer = previousFront
+            val presentStartNanos = System.nanoTime()
+            canvas.drawBitmap(back.bitmap, 0f, 0f, overwritePaint)
             surface.unlockCanvasAndPost(canvas)
+            presentNanosAccum += System.nanoTime() - presentStartNanos
         } catch (_: IllegalArgumentException) {
             // surface 可能在锁画布与提交之间被视图销毁侧废弃，提交即抛；
             // 与锁失败同样按 surface 故障计数处理，不能让异常杀死渲染线程。
@@ -431,11 +446,31 @@ class PetController(
             return
         }
         surfaceFailures = 0
+        profileFrames++
 
         val costMs = (System.nanoTime() - startedNanos) / 1_000_000L
         if (costMs > 100 && startedNanos - lastSlowLogNanos > 3_000_000_000L) {
             lastSlowLogNanos = startedNanos
             Log.i(TAG, "Slow frame: ${costMs}ms (surface ${width}x${height})")
         }
+        if (startedNanos - lastProfileLogNanos > 10_000_000_000L) {
+            if (lastProfileLogNanos != 0L && profileFrames > 0) {
+                val ms = "%.1f"
+                Log.i(
+                    TAG,
+                    "Frame profile: lock=${ms.format(lockNanosAccum.toFloat() / profileFrames / 1_000_000)}ms " +
+                        "render=${ms.format(renderNanosAccum.toFloat() / profileFrames / 1_000_000)}ms " +
+                        "present=${ms.format(presentNanosAccum.toFloat() / profileFrames / 1_000_000)}ms " +
+                        "over $profileFrames frames (surface ${width}x${height})"
+                )
+            }
+            lastProfileLogNanos = startedNanos
+            lockNanosAccum = 0
+            renderNanosAccum = 0
+            presentNanosAccum = 0
+            profileFrames = 0
+        }
     }
+
+    private class FrameBuffer(val bitmap: Bitmap, val buffer: ByteBuffer)
 }

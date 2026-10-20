@@ -2,6 +2,7 @@
 //! 末端经盒式降采样输出预乘 RGBA（Android Bitmap 原生格式）。
 
 use glam::{Mat4, Vec2, Vec3};
+use std::sync::OnceLock;
 
 use crate::lighting::Lighting;
 use crate::pose::{self, Skeleton};
@@ -228,17 +229,167 @@ impl Frame {
                 self.depth[row + left..row + right].fill(f32::INFINITY);
             }
         }
-        self.bounds = [self.width as i32, self.height as i32, 0, 0];
-        for part in parts {
-            let tex = match part.tex {
-                Tex::Skin => &skin.texture,
-                Tex::Cape => cape.expect("cape part without cape texture"),
+        let empty = [self.width as i32, self.height as i32, 0, 0];
+        self.bounds = empty;
+
+        let threads = if parts.is_empty() {
+            1
+        } else {
+            raster_threads(self.width, self.height)
+        };
+        if threads <= 1 {
+            let mut band = Band {
+                pixels: &mut self.pixels[..],
+                depth: &mut self.depth[..],
+                width: self.width,
+                height: self.height,
+                start_row: 0,
+                end_row: self.height,
+                bounds: empty,
             };
-            self.draw_box(part, tex, light);
+            for part in parts {
+                let tex = match part.tex {
+                    Tex::Skin => &skin.texture,
+                    Tex::Cape => cape.expect("cape part without cape texture"),
+                };
+                draw_box(&mut band, part, tex, light);
+            }
+            self.bounds = band.bounds;
+            return;
+        }
+
+        let width = self.width;
+        let height = self.height;
+        let band_count = threads * 4;
+        let rows_per_band = height.div_ceil(band_count);
+        let mut groups: Vec<Vec<Band>> = (0..threads).map(|_| Vec::new()).collect();
+        let mut rest_pixels = self.pixels.as_mut_slice();
+        let mut rest_depth = self.depth.as_mut_slice();
+        let mut start_row = 0;
+        let mut index = 0;
+        while start_row < height {
+            let end_row = (start_row + rows_per_band).min(height);
+            let (band_pixels, tail_pixels) = rest_pixels.split_at_mut((end_row - start_row) * width * 4);
+            let (band_depth, tail_depth) = rest_depth.split_at_mut((end_row - start_row) * width);
+            rest_pixels = tail_pixels;
+            rest_depth = tail_depth;
+            groups[index % threads].push(Band {
+                pixels: band_pixels,
+                depth: band_depth,
+                width,
+                height,
+                start_row,
+                end_row,
+                bounds: empty,
+            });
+            index += 1;
+            start_row = end_row;
+        }
+        self.bounds = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(groups.len());
+            for group in groups {
+                handles.push(scope.spawn(move || {
+                    let mut acc = empty;
+                    for mut band in group {
+                        for part in parts {
+                            let tex = match part.tex {
+                                Tex::Skin => &skin.texture,
+                                Tex::Cape => cape.expect("cape part without cape texture"),
+                            };
+                            draw_box(&mut band, part, tex, light);
+                        }
+                        acc = merge_bounds(acc, band.bounds);
+                    }
+                    acc
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("raster thread panicked"))
+                .reduce(merge_bounds)
+                .unwrap_or(empty)
+        });
+    }
+}
+
+/// 一段行区间及其独占的颜色/深度切片
+struct Band<'a> {
+    pixels: &'a mut [u8],
+    depth: &'a mut [f32],
+    width: usize,
+    height: usize,
+    start_row: usize,
+    end_row: usize,
+    /// 区间内的写入包围盒
+    bounds: [i32; 4],
+}
+
+fn merge_bounds(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
+    [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
+}
+
+#[cfg(test)]
+static TEST_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 光栅线程数：小帧不值得分片开销；条带轮转下最慢的核心决定整帧
+/// 尾延迟，大小核异构设备只用大核，避免小核拖尾。
+fn raster_threads(width: usize, height: usize) -> usize {
+    #[cfg(test)]
+    {
+        let forced = TEST_THREADS.load(std::sync::atomic::Ordering::Relaxed);
+        if forced != 0 {
+            return forced;
         }
     }
+    if width * height < 64 * 1024 {
+        return 1;
+    }
+    static BIG_CORES: OnceLock<Option<usize>> = OnceLock::new();
+    let available = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
+    match *BIG_CORES.get_or_init(detect_big_cores) {
+        Some(big) if big >= 2 => big.min(available),
+        _ => available,
+    }
+}
 
-    fn draw_box(&mut self, b: &BoxPart, tex: &Texture, light: &Lighting) {
+/// 大核探测：优先读内核归一化算力 cpu_capacity，缺失时按核心最高
+/// 频率之比估计（≥ 最快核心 75% 视为大核）；都读不到返回 None，
+/// 按全部核心处理。
+fn detect_big_cores() -> Option<usize> {
+    let mut capacities = Vec::new();
+    let mut freqs = Vec::new();
+    for cpu in 0..16u32 {
+        if let Some(v) =
+            read_sysfs_f32(format!("/sys/devices/system/cpu/cpu{cpu}/cpu_capacity"))
+        {
+            capacities.push(v);
+        }
+        if let Some(v) =
+            read_sysfs_u32(format!("/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_max_freq"))
+        {
+            freqs.push(v);
+        }
+    }
+    if capacities.len() >= 4 {
+        let max = capacities.iter().cloned().fold(0., f32::max);
+        return Some(capacities.iter().filter(|&&c| c >= max * 0.75).count());
+    }
+    if freqs.len() >= 4 {
+        let max = *freqs.iter().max()?;
+        return Some(freqs.iter().filter(|&&f| u64::from(f) * 4 >= u64::from(max) * 3).count());
+    }
+    None
+}
+
+fn read_sysfs_u32(path: String) -> Option<u32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn read_sysfs_f32(path: String) -> Option<f32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn draw_box(band: &mut Band, b: &BoxPart, tex: &Texture, light: &Lighting) {
         let Vec3 { x: w, y: h, z: d } = b.size;
         let u = b.uv.x;
         let v = b.uv.y;
@@ -283,8 +434,8 @@ impl Frame {
                     }
                     pos[i] = project(
                         b.transform.transform_point3(a),
-                        self.width as f32,
-                        self.height as f32,
+                        band.width as f32,
+                        band.height as f32,
                     );
                     uv[i] = Vec2::new(
                         x + ix as f32 * tw,
@@ -301,7 +452,8 @@ impl Frame {
                 if b.inflate == 0. && ((area >= 0.) != b.mirror) {
                     continue;
                 }
-                self.triangle(
+                triangle(
+                    band,
                     [pos[ids[0]], pos[ids[1]], pos[ids[2]]],
                     [uv[ids[0]], uv[ids[1]], uv[ids[2]]],
                     tex,
@@ -309,9 +461,9 @@ impl Frame {
                 );
             }
         }
-    }
+}
 
-    fn triangle(&mut self, p: [Vec3; 3], uv: [Vec2; 3], tex: &Texture, lut: &[[u8; 256]; 3]) {
+fn triangle(band: &mut Band, p: [Vec3; 3], uv: [Vec2; 3], tex: &Texture, lut: &[[u8; 256]; 3]) {
         let area = edge(p[0], p[1], p[2]);
         if area.abs() < 0.0001 {
             return;
@@ -327,19 +479,21 @@ impl Frame {
             .map(|p| p.x)
             .fold(f32::NEG_INFINITY, f32::max)
             .ceil()
-            .min(self.width as f32) as usize;
+            .min(band.width as f32) as usize;
         let miny = p
             .iter()
             .map(|p| p.y)
             .fold(f32::INFINITY, f32::min)
             .floor()
-            .max(0.) as usize;
+            .max(0.)
+            .max(band.start_row as f32) as usize;
         let maxy = p
             .iter()
             .map(|p| p.y)
             .fold(f32::NEG_INFINITY, f32::max)
             .ceil()
-            .min(self.height as f32) as usize;
+            .min(band.height as f32)
+            .min(band.end_row as f32) as usize;
         let texscale = tex.image.width() as f32 / 64.;
         let inv_area = area.recip();
         let ax = -(p[2].y - p[1].y) * inv_area;
@@ -377,6 +531,7 @@ impl Frame {
             )
         });
         for y in miny..maxy {
+            let row = (y - band.start_row) * band.width;
             let row_a = a0 + (y - miny) as f32 * ay;
             let row_c = c0 + (y - miny) as f32 * cy;
             let coverage = edges.map(|(dx, _, start)| start + dx * (y - miny) as i64 * 256);
@@ -387,8 +542,8 @@ impl Frame {
                 let a = row_a + (x - minx) as f32 * ax;
                 let c = row_c + (x - minx) as f32 * cx;
                 let z = p[1].z + za * a + zc * c;
-                let i = y * self.width + x;
-                if z >= self.depth[i] {
+                let i = row + x;
+                if z >= band.depth[i] {
                     continue;
                 }
                 let tx = t[1].x + ta.x * a + tc.x * c;
@@ -408,28 +563,29 @@ impl Frame {
                 ];
                 let off = i * 4;
                 if alpha == 255 {
-                    self.pixels[off..off + 4].copy_from_slice(&[color[2], color[1], color[0], 255]);
+                    band.pixels[off..off + 4].copy_from_slice(&[color[2], color[1], color[0], 255]);
                 } else {
                     let aa = alpha as u32;
                     let inv = 255 - aa;
                     let channels = [color[2], color[1], color[0]];
                     for ch in 0..3 {
-                        self.pixels[off + ch] =
-                            ((channels[ch] as u32 * aa + self.pixels[off + ch] as u32 * inv + 127)
+                        band.pixels[off + ch] =
+                            ((channels[ch] as u32 * aa + band.pixels[off + ch] as u32 * inv + 127)
                                 / 255) as u8;
                     }
-                    self.pixels[off + 3] =
-                        (aa + (self.pixels[off + 3] as u32 * inv + 127) / 255) as u8;
+                    band.pixels[off + 3] =
+                        (aa + (band.pixels[off + 3] as u32 * inv + 127) / 255) as u8;
                 }
-                self.depth[i] = z;
-                self.bounds[0] = self.bounds[0].min(x as i32);
-                self.bounds[1] = self.bounds[1].min(y as i32);
-                self.bounds[2] = self.bounds[2].max(x as i32 + 1);
-                self.bounds[3] = self.bounds[3].max(y as i32 + 1);
+                band.depth[i] = z;
+                band.bounds[0] = band.bounds[0].min(x as i32);
+                band.bounds[1] = band.bounds[1].min(y as i32);
+                band.bounds[2] = band.bounds[2].max(x as i32 + 1);
+                band.bounds[3] = band.bounds[3].max(y as i32 + 1);
             }
         }
-    }
+}
 
+impl Frame {
     /// 降采样/缩放并输出预乘 RGBA 到调用方缓冲。
     /// 帧大于目标时盒式平均（预乘空间直接平均即抗锯齿），
     /// 帧小于目标时最近邻放大。
@@ -440,23 +596,15 @@ impl Frame {
                 dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
             }
         } else if self.width > w && self.height > h {
+            let threads = raster_threads(w, h);
             if self.width == w * 2 && self.height == h * 2 {
                 // 精确 2×2 降采样：每个源像素权重恰为 256/256，与通用权重路径
                 // 等价，直接四像素求和免去逐权重乘加。
-                for y in 0..h {
-                    let src_row = (y * 2 * self.width) * 4;
-                    for x in 0..w {
-                        let l = x * 8;
-                        let out_off = (y * w + x) * 4;
-                        for (dst_ch, src_ch) in [(0usize, 2usize), (1, 1), (2, 0), (3, 3)] {
-                            let sum = u32::from(self.pixels[src_row + l + src_ch])
-                                + u32::from(self.pixels[src_row + l + 4 + src_ch])
-                                + u32::from(self.pixels[src_row + self.width * 4 + l + src_ch])
-                                + u32::from(self.pixels[src_row + self.width * 4 + l + 4 + src_ch]);
-                            out[out_off + dst_ch] = ((sum + 2) >> 2) as u8;
-                        }
-                    }
-                }
+                let pixels = &self.pixels[..];
+                let src_width = self.width;
+                parallel_rows(out, w, h, threads, |rows, y0| {
+                    downsample_exact2(pixels, src_width, rows, w, y0)
+                });
             } else {
                 if self.resample.as_ref().map(|r| r.source) != Some((self.width, self.height)) {
                     self.resample = Some(Resample {
@@ -465,33 +613,12 @@ impl Frame {
                         rows: box_filter(self.height, h),
                     });
                 }
+                let pixels = &self.pixels[..];
+                let src_width = self.width;
                 let resample = self.resample.as_ref().unwrap();
-                for (y, row) in resample.rows.iter().enumerate() {
-                    for (x, col) in resample.columns.iter().enumerate() {
-                        let mut acc = [0u32; 4];
-                        let mut total = 0u32;
-                        for (dy, &wy) in row.factors.iter().enumerate() {
-                            let src = self.pixels
-                                [(row.start + dy) * self.width * 4 + col.start * 4..]
-                                .as_ptr();
-                            for (dx, &wx) in col.factors.iter().enumerate() {
-                                let weight = wx * wy;
-                                total += weight;
-                                let px = unsafe { src.add(dx * 4) };
-                                for ch in 0..4 {
-                                    acc[ch] += unsafe { *px.add(ch) } as u32 * weight;
-                                }
-                            }
-                        }
-                        let out_off = (y * w + x) * 4;
-                        out[out_off..out_off + 4].copy_from_slice(&[
-                            ((acc[2] + total / 2) / total) as u8,
-                            ((acc[1] + total / 2) / total) as u8,
-                            ((acc[0] + total / 2) / total) as u8,
-                            ((acc[3] + total / 2) / total) as u8,
-                        ]);
-                    }
-                }
+                parallel_rows(out, w, h, threads, |rows, y0| {
+                    downsample_weighted(pixels, src_width, resample, rows, w, y0)
+                });
             }
         } else {
             let mut last_sy = usize::MAX;
@@ -514,6 +641,89 @@ impl Frame {
                     }
                 }
             }
+        }
+    }
+}
+
+/// 按输出行区间并行执行 `draw`：区间互不重叠，各行结果只依赖自身行号。
+fn parallel_rows(
+    out: &mut [u8],
+    w: usize,
+    h: usize,
+    threads: usize,
+    draw: impl Fn(&mut [u8], usize) + Sync,
+) {
+    if threads <= 1 {
+        draw(out, 0);
+        return;
+    }
+    let draw = &draw;
+    let rows_per_band = h.div_ceil(threads);
+    std::thread::scope(|scope| {
+        let mut rest = out;
+        let mut start = 0;
+        while start < h {
+            let end = (start + rows_per_band).min(h);
+            let (chunk, tail) = rest.split_at_mut((end - start) * w * 4);
+            rest = tail;
+            scope.spawn(move || draw(chunk, start));
+            start = end;
+        }
+    });
+}
+
+/// 目标第 [y0, y0 + 行数) 行的精确 2×2 盒式平均。
+fn downsample_exact2(pixels: &[u8], src_width: usize, out: &mut [u8], w: usize, y0: usize) {
+    let rows = out.len() / (w * 4);
+    for row in 0..rows {
+        let y = y0 + row;
+        let src_row = (y * 2 * src_width) * 4;
+        for x in 0..w {
+            let l = x * 8;
+            let out_off = (row * w + x) * 4;
+            for (dst_ch, src_ch) in [(0usize, 2usize), (1, 1), (2, 0), (3, 3)] {
+                let sum = u32::from(pixels[src_row + l + src_ch])
+                    + u32::from(pixels[src_row + l + 4 + src_ch])
+                    + u32::from(pixels[src_row + src_width * 4 + l + src_ch])
+                    + u32::from(pixels[src_row + src_width * 4 + l + 4 + src_ch]);
+                out[out_off + dst_ch] = ((sum + 2) >> 2) as u8;
+            }
+        }
+    }
+}
+
+/// 目标第 [y0, y0 + 行数) 行的权重盒式平均。
+fn downsample_weighted(
+    pixels: &[u8],
+    src_width: usize,
+    resample: &Resample,
+    out: &mut [u8],
+    w: usize,
+    y0: usize,
+) {
+    let rows = out.len() / (w * 4);
+    for (row, weights) in resample.rows[y0..y0 + rows].iter().enumerate() {
+        for (x, col) in resample.columns.iter().enumerate() {
+            let mut acc = [0u32; 4];
+            let mut total = 0u32;
+            for (dy, &wy) in weights.factors.iter().enumerate() {
+                let src = pixels[(weights.start + dy) * src_width * 4 + col.start * 4..].as_ptr();
+                for (dx, &wx) in col.factors.iter().enumerate() {
+                    let weight = wx * wy;
+                    total += weight;
+                    let px = unsafe { src.add(dx * 4) };
+                    for ch in 0..4 {
+                        acc[ch] += unsafe { *px.add(ch) } as u32 * weight;
+                    }
+                }
+            }
+            let out_off = (row * w + x) * 4;
+            out[out_off..out_off + 4].copy_from_slice(&[
+                ((acc[2] + total / 2) / total) as u8,
+                ((acc[1] + total / 2) / total) as u8,
+                ((acc[0] + total / 2) / total) as u8,
+                ((acc[3] + total / 2) / total) as u8,
+            ]);
         }
     }
 }
@@ -656,5 +866,42 @@ mod tests {
         frame.draw(&[], &skin, None, &light);
         assert!(frame.pixels.iter().all(|&v| v == 0));
         assert!(frame.depth.iter().all(|d| d.is_infinite()));
+    }
+
+    /// 并行条带与单线程必须产出逐字节一致的帧。
+    #[test]
+    fn parallel_raster_matches_serial_output() {
+        use std::sync::atomic::Ordering;
+
+        fn skin_png() -> Vec<u8> {
+            let mut img = image::RgbaImage::new(64, 64);
+            for p in img.pixels_mut() {
+                *p = image::Rgba([120, 90, 60, 255]);
+            }
+            let mut png = Vec::new();
+            img.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        }
+
+        fn stream(threads: usize) -> Vec<u8> {
+            TEST_THREADS.store(threads, Ordering::Relaxed);
+            let mut model =
+                crate::api::PetModel::new(&skin_png(), None).expect("model");
+            model.play_animation(crate::animation::AnimationId::Walking, 1., true);
+            let (w, h) = (150usize, 170usize);
+            let mut out = vec![0u8; w * h * 4];
+            for i in 0..40 {
+                model
+                    .render(w, h, i as f32 / 60., 1. / 60., &mut out)
+                    .unwrap();
+            }
+            out
+        }
+
+        let serial = stream(1);
+        let parallel = stream(4);
+        TEST_THREADS.store(0, Ordering::Relaxed);
+        assert_eq!(serial, parallel);
     }
 }
