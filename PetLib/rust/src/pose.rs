@@ -1,9 +1,4 @@
-//! 玩家骨架：动画叠加、注视叠加、整体偏航、压扁脉冲与摆臂。
-//!
-//! 动画每帧绝对赋值各部件旋转与位置增量；
-//! 骨架额外叠加头部注视（追踪时含相机基准，静止时与身体对齐）。
-//! 注视含逐帧放弃规则：背对摄像机或头-身水平扭角超限时头部回正（均带迟滞）。
-//! 所有平滑均为帧率无关的指数平滑（alpha = 1 - exp(-dt/τ)）。
+//! 玩家骨架
 
 use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
 
@@ -305,13 +300,12 @@ impl Skeleton {
         // 追踪中  世界空间解算指向输入点的朝向，受颈部活动范围截断，以 τ_gaze 平滑追随；
         //        背对摄像机或头-身水平扭角超限时放弃跟随，头部回正到身体朝向。
         // 未追踪  与身体朝向对齐（仅动画摆动），以 τ_recenter 平滑回正。
-        let parent = Quat::from_rotation_y(self.model_yaw);
+        let parent = Quat::from_rotation_y(self.model_yaw + front_yaw());
         let (head_target, tau) = match self.gaze_target.filter(|_| self.head_follow()) {
             Some(_) => {
                 let raw = self.solve_gaze(view);
-                // 背对切断（迟滞）：偏航相对摄像机方向（front_yaw），
-                // 不能以世界 0° 为基准，否则切口在视觉上左右不对称。
-                let facing = wrap_pi(self.model_yaw - front_yaw()).abs();
+                // 背对切断（迟滞）：model_yaw 即相对相机正面的偏航。
+                let facing = wrap_pi(self.model_yaw).abs();
                 if facing > GAZE_OFF_YAW {
                     self.gaze_yaw_cut = true;
                 } else if facing < GAZE_ON_YAW {
@@ -392,7 +386,7 @@ impl Skeleton {
             return Vec2::ZERO;
         };
         // 眼睛的世界位置：根偏航 ∘ 颈部（头部枢轴，含 bob）+ 相机基准上移。
-        let neck = Mat4::from_rotation_y(self.model_yaw)
+        let neck = Mat4::from_rotation_y(self.model_yaw + front_yaw())
             * Mat4::from_translation(Vec3::Y * (24. + self.head_pos));
         let view_basis = view_quat();
         let eye = neck.transform_point3(Vec3::ZERO) + view_basis * (Vec3::Y * 3.);
@@ -476,8 +470,8 @@ mod tests {
             s.head.abs_diff_eq(s.head_rot, 0.1),
             "head must realign while back-facing"
         );
-        // 拖回 105°（相对摄像机 82°，处于迟滞区间）：保持切断。
-        s.set_yaw_target(105f32.to_radians());
+        // 拖回 82°（处于 75°~90° 迟滞区间）：保持切断。
+        s.set_yaw_target(82f32.to_radians());
         for i in 1200..1800 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
@@ -520,8 +514,8 @@ mod tests {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         assert!(s.gaze.length() < 0.001);
-        // 拖回 -60°（相对摄像机 -83°，处于迟滞区间）：保持切断。
-        s.set_yaw_target(-60f32.to_radians());
+        // 拖回 -82°（处于 -90°~-75° 迟滞区间）：保持切断。
+        s.set_yaw_target(-82f32.to_radians());
         for i in 1800..2400 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }

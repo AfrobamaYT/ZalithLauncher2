@@ -307,7 +307,7 @@ private fun ActionsLayout(
             skin = skinBytes,
             cape = capeBytes,
             arm = armModel,
-            yaw = Math.toRadians(50.0).toFloat()
+            yaw = Math.toRadians(35.0).toFloat()
         )
 
         //添加账号

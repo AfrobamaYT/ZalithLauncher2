@@ -337,4 +337,17 @@ mod tests {
         let mut out = vec![0u8; 10];
         assert!(model.render(4, 4, 0., 0., &mut out).is_err());
     }
+
+    /// 整体偏航以"面向相机"为 0 基准：yaw 0 时躯干的世界朝向
+    /// 必须正对相机方位角。
+    #[test]
+    fn zero_yaw_faces_the_camera() {
+        let model = test_model();
+        // 躯干局部旋转在静止姿态下为恒等，其世界 Z 轴即身体朝向。
+        let body = &model.debug_part_transforms()[0];
+        let (sin_f, cos_f) = (crate::pose::front_yaw().sin(), crate::pose::front_yaw().cos());
+        let (dx, dz) = (body.matrix[8], body.matrix[10]);
+        assert!((dx - sin_f).abs() < 1e-4, "dx={dx}");
+        assert!((dz - cos_f).abs() < 1e-4, "dz={dz}");
+    }
 }

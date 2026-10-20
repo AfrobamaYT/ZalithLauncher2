@@ -168,7 +168,7 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
     for part in &mut v {
         part.transform = anchor * part.transform;
     }
-    let global = Mat4::from_rotation_y(pose.model_yaw());
+    let global = Mat4::from_rotation_y(pose.model_yaw() + pose::front_yaw());
     for part in &mut v {
         part.transform = global * part.transform;
     }

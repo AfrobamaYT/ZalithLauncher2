@@ -570,7 +570,7 @@ private fun ActionMenuTallerContent(
         val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
         // 偏航角符号与停泊侧相反，让模型面向屏幕内容一侧
         val yaw = Math.toRadians(
-            ((if (dockedSide == ActionMenuSide.START) 50.0 else -(50.0)) * (if (isRtl) -1 else 1))
+            ((if (dockedSide == ActionMenuSide.START) 35.0 else -(35.0)) * (if (isRtl) -1 else 1))
         ).toFloat()
 
         val armModel = account?.skinModelType?.toArmModel()

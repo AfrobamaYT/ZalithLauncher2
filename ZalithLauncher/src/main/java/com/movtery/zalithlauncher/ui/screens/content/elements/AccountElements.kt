@@ -1426,7 +1426,6 @@ fun ChangeSkinDialog(
                                 .background(itemColor(false)),
                             contentAlignment = Alignment.Center
                         ) {
-                            // 独立窗口与事件泵不同坐标系，关闭视线跟随
                             PetModelView(
                                 modifier = Modifier.fillMaxSize(),
                                 skin = previewSkin,
