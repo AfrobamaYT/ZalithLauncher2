@@ -1,3 +1,21 @@
+/*
+ * Zalith Launcher 2
+ * Copyright (C) 2025 MovTery <movtery228@qq.com> and contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/gpl-3.0.txt>.
+ */
+
 package com.movtery.petlib
 
 import android.graphics.Bitmap
@@ -78,11 +96,6 @@ class PetController(
     private var surfaceFailures = 0
     private var lastRenderNanos = 0L
     private var lastSlowLogNanos = 0L
-    private var lastProfileLogNanos = 0L
-    private var lockNanosAccum = 0L
-    private var renderNanosAccum = 0L
-    private var presentNanosAccum = 0L
-    private var profileFrames = 0
     private var attachedSurface: Surface? = null
     private val surfaceRef = AtomicReference<Surface?>(null)
     private val frameInFlight = AtomicBoolean(false)
@@ -399,7 +412,6 @@ class PetController(
 
         // surface 被系统侧失效时，lockCanvas 可能抛异常，也可能只返回 null 并由
         // native 层打印错误。先锁画布再渲染，失败帧不产生渲染开销。
-        val lockStartNanos = System.nanoTime()
         val canvas = try {
             surface.lockCanvas(null)
         } catch (_: IllegalStateException) {
@@ -412,8 +424,6 @@ class PetController(
             onSurfaceFailure(surface)
             return
         }
-        lockNanosAccum += System.nanoTime() - lockStartNanos
-        val renderStartNanos = System.nanoTime()
         try {
             var back = backBuffer
             if (back == null || back.bitmap.width != width || back.bitmap.height != height) {
@@ -427,15 +437,12 @@ class PetController(
             PetLibNative.nativeRender(ptr, width, height, startedNanos / 1_000_000_000f, dt, back.buffer)
             back.buffer.rewind()
             back.bitmap.copyPixelsFromBuffer(back.buffer)
-            renderNanosAccum += System.nanoTime() - renderStartNanos
             // 交换：刚完成的帧转为待提交，旧的前台缓冲留给下一轮光栅
             val previousFront = frontBuffer
             frontBuffer = back
             backBuffer = previousFront
-            val presentStartNanos = System.nanoTime()
             canvas.drawBitmap(back.bitmap, 0f, 0f, overwritePaint)
             surface.unlockCanvasAndPost(canvas)
-            presentNanosAccum += System.nanoTime() - presentStartNanos
         } catch (_: IllegalArgumentException) {
             // surface 可能在锁画布与提交之间被视图销毁侧废弃，提交即抛；
             // 与锁失败同样按 surface 故障计数处理，不能让异常杀死渲染线程。
@@ -446,29 +453,11 @@ class PetController(
             return
         }
         surfaceFailures = 0
-        profileFrames++
 
         val costMs = (System.nanoTime() - startedNanos) / 1_000_000L
         if (costMs > 100 && startedNanos - lastSlowLogNanos > 3_000_000_000L) {
             lastSlowLogNanos = startedNanos
             Log.i(TAG, "Slow frame: ${costMs}ms (surface ${width}x${height})")
-        }
-        if (startedNanos - lastProfileLogNanos > 10_000_000_000L) {
-            if (lastProfileLogNanos != 0L && profileFrames > 0) {
-                val ms = "%.1f"
-                Log.i(
-                    TAG,
-                    "Frame profile: lock=${ms.format(lockNanosAccum.toFloat() / profileFrames / 1_000_000)}ms " +
-                        "render=${ms.format(renderNanosAccum.toFloat() / profileFrames / 1_000_000)}ms " +
-                        "present=${ms.format(presentNanosAccum.toFloat() / profileFrames / 1_000_000)}ms " +
-                        "over $profileFrames frames (surface ${width}x${height})"
-                )
-            }
-            lastProfileLogNanos = startedNanos
-            lockNanosAccum = 0
-            renderNanosAccum = 0
-            presentNanosAccum = 0
-            profileFrames = 0
         }
     }
 
