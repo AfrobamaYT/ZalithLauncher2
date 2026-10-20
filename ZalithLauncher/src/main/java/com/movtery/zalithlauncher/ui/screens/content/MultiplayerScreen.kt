@@ -50,7 +50,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.notification.NotificationManager
 import com.movtery.zalithlauncher.path.PathManager
@@ -64,7 +63,6 @@ import com.movtery.zalithlauncher.ui.components.BackgroundCard
 import com.movtery.zalithlauncher.ui.components.MarqueeText
 import com.movtery.zalithlauncher.ui.components.NotificationCheck
 import com.movtery.zalithlauncher.ui.components.OwnOutlinedTextField
-import com.movtery.zalithlauncher.ui.components.RegionRestrictionNotice
 import com.movtery.zalithlauncher.ui.components.SimpleAlertDialog
 import com.movtery.zalithlauncher.ui.components.influencedByBackgroundColor
 import com.movtery.zalithlauncher.ui.components.verticalScrollWithBar
@@ -74,7 +72,6 @@ import com.movtery.zalithlauncher.ui.screens.content.settings.layouts.SettingsCa
 import com.movtery.zalithlauncher.ui.screens.content.settings.layouts.SettingsCardColumn
 import com.movtery.zalithlauncher.ui.screens.content.settings.layouts.SwitchSettingsCard
 import com.movtery.zalithlauncher.ui.theme.cardTitleColor
-import com.movtery.zalithlauncher.utils.RegionRestriction
 import com.movtery.zalithlauncher.utils.file.shareFile
 import com.movtery.zalithlauncher.viewmodel.EventViewModel
 import com.movtery.zalithlauncher.viewmodel.ScreenBackStackViewModel
@@ -91,16 +88,6 @@ fun MultiplayerScreen(
         screenKey = NormalNavKey.Multiplayer,
         currentKey = backScreenViewModel.mainScreen.currentKey
     ) { isVisible ->
-        val regionState by RegionRestriction.state.collectAsStateWithLifecycle()
-        LaunchedEffect(Unit) {
-            RegionRestriction.ensureChecked()
-        }
-
-        if (regionState.restricting) {
-            RegionRestrictionNotice(modifier = Modifier.fillMaxSize())
-            return@BaseScreen
-        }
-
         AnimatedRow(
             modifier = Modifier.fillMaxSize(),
             isVisible = isVisible,

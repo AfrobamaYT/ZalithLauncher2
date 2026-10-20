@@ -115,7 +115,6 @@ import com.movtery.zalithlauncher.ui.screens.game.elements.SendKeycodeState
 import com.movtery.zalithlauncher.ui.screens.game.multiplayer.TerracottaOperation
 import com.movtery.zalithlauncher.ui.screens.game.multiplayer.rememberTerracottaViewModel
 import com.movtery.zalithlauncher.ui.screens.main.control_editor.ControlEditor
-import com.movtery.zalithlauncher.utils.RegionRestriction
 import com.movtery.zalithlauncher.utils.currentGameDisplayLayout
 import com.movtery.zalithlauncher.utils.logging.Logger
 import com.movtery.zalithlauncher.viewmodel.EditorViewModel
@@ -594,8 +593,6 @@ fun GameScreen(
         getUserName = getAccountName
     )
 
-    val regionState by RegionRestriction.state.collectAsStateWithLifecycle()
-
     LaunchedEffect(viewModel.isEditingLayout, viewModel.gameMenuState) {
         //向VMActivity同步状态，编辑控制布局或打开游戏菜单时，不会继续处理按键事件
         val allowKeyHandle = !viewModel.isEditingLayout && viewModel.gameMenuState != MenuState.SHOW
@@ -765,7 +762,7 @@ fun GameScreen(
             closeScreen = { viewModel.gameMenuState = MenuState.HIDE },
             onForceClose = { viewModel.forceCloseState = ForceCloseOperation.Show },
             onSwitchLog = { onLogStateChange(logState.next()) },
-            enableTerracotta = AllSettings.enableTerracotta.state && !regionState.restricting,
+            enableTerracotta = AllSettings.enableTerracotta.state,
             onOpenTerracottaMenu = { terracottaViewModel.openMenu() },
             onRefreshWindowSize = { eventViewModel.sendEvent(EventViewModel.Event.Game.RefreshSize) },
             onInputMethod = {
