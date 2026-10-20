@@ -73,10 +73,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -113,8 +113,6 @@ import androidx.core.graphics.createBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.movtery.petlib.ArmModel
 import com.movtery.petlib.PetAnimation
-import com.movtery.petlib.PetController
-import com.movtery.petlib.PetPreview
 import com.movtery.zalithlauncher.BuildKeys
 import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.game.account.Account
@@ -145,13 +143,13 @@ import com.movtery.zalithlauncher.ui.components.IconTextButton
 import com.movtery.zalithlauncher.ui.components.ImePanContainer
 import com.movtery.zalithlauncher.ui.components.MarqueeText
 import com.movtery.zalithlauncher.ui.components.OwnOutlinedTextField
+import com.movtery.zalithlauncher.ui.components.PetModelView
 import com.movtery.zalithlauncher.ui.components.RadioCard
 import com.movtery.zalithlauncher.ui.components.SimpleAlertDialog
 import com.movtery.zalithlauncher.ui.components.SimpleListDialog
 import com.movtery.zalithlauncher.ui.components.SingleLineTextCheck
 import com.movtery.zalithlauncher.ui.components.fadeEdge
 import com.movtery.zalithlauncher.ui.components.rememberDialogMaxHeight
-import com.movtery.zalithlauncher.ui.components.setSkinDefaultable
 import com.movtery.zalithlauncher.ui.components.verticalScrollWithBar
 import com.movtery.zalithlauncher.ui.screens.main.control_editor.InfoLayoutTextItem
 import com.movtery.zalithlauncher.ui.theme.cardColor
@@ -1315,17 +1313,6 @@ fun ChangeSkinDialog(
     onApplyCape: (PlayerProfile.Cape) -> Unit,
     onFetchCapes: () -> Unit
 ) {
-    val context = LocalContext.current
-    val petController = remember {
-        val initialSkin = context.assets.open("steve.png").use { it.readBytes() }
-        PetController(skin = initialSkin, arm = null).also { controller ->
-            controller.playAnimation(PetAnimation.Walking, speed = 0.8f)
-        }
-    }
-    DisposableEffect(petController) {
-        onDispose { petController.close() }
-    }
-
     var showCapeSelector by remember { mutableStateOf(false) }
 
     var isFetchingCapes by remember { mutableStateOf(false) }
@@ -1348,10 +1335,10 @@ fun ChangeSkinDialog(
     }
 
     // 加载披风
-    LaunchedEffect(petController, currentCapeToLoad, availableCapes) {
-        if (!account.isMicrosoftAccount()) return@LaunchedEffect
+    val previewCape by produceState<ByteArray?>(null, currentCapeToLoad, availableCapes) {
+        if (!account.isMicrosoftAccount()) return@produceState
 
-        val capeBytes = if (currentCapeToLoad != EmptyCape) {
+        value = if (currentCapeToLoad != EmptyCape) {
             // 列表已加载完成才会走到这里
             runCatching {
                 currentCapeToLoad
@@ -1369,7 +1356,6 @@ fun ChangeSkinDialog(
         } else {
             null
         }
-        petController.setCape(capeBytes)
     }
 
     val skinPicker =
@@ -1378,27 +1364,24 @@ fun ChangeSkinDialog(
         }
 
     // 皮肤状态变化时重载预览皮肤
-    LaunchedEffect(petController, skinState) {
-        when (skinState) {
-            ChangeSkin.None -> {
-                val skinBytes = account.getSkinFile()
-                    .takeIf { it.exists() }
-                    ?.inputStream()
-                    ?.use { it.readBytes() }
-
-                petController.setSkinDefaultable(context, skinBytes, account.skinModelType.toArmModel())
-            }
-            is ChangeSkin.ChangeSkinData -> {
-                val skinBytes = runCatching {
-                    skinState.cacheFile
-                        .inputStream()
-                        .use { it.readBytes() }
-                }.getOrNull()
-
-                petController.setSkinDefaultable(context, skinBytes, skinState.skinModel.toArmModel())
-            }
-            ChangeSkin.ResetSkin -> petController.setSkinDefaultable(context, null, ArmModel.Classic)
+    val previewSkin by produceState<ByteArray?>(null, skinState) {
+        value = when (val state = skinState) {
+            ChangeSkin.None -> account.getSkinFile()
+                .takeIf { it.exists() }
+                ?.inputStream()
+                ?.use { it.readBytes() }
+            is ChangeSkin.ChangeSkinData -> runCatching {
+                state.cacheFile
+                    .inputStream()
+                    .use { it.readBytes() }
+            }.getOrNull()
+            ChangeSkin.ResetSkin -> null
         }
+    }
+    val previewArm = when (skinState) {
+        ChangeSkin.None -> account.skinModelType.toArmModel()
+        is ChangeSkin.ChangeSkinData -> skinState.skinModel.toArmModel()
+        ChangeSkin.ResetSkin -> ArmModel.Classic
     }
 
     Dialog(
@@ -1443,9 +1426,15 @@ fun ChangeSkinDialog(
                                 .background(itemColor(false)),
                             contentAlignment = Alignment.Center
                         ) {
-                            PetPreview(
-                                controller = petController,
-                                modifier = Modifier.fillMaxSize()
+                            // 独立窗口与事件泵不同坐标系，关闭视线跟随
+                            PetModelView(
+                                modifier = Modifier.fillMaxSize(),
+                                skin = previewSkin,
+                                cape = previewCape,
+                                arm = previewArm,
+                                animation = PetAnimation.Walking,
+                                animationSpeed = 0.8f,
+                                gazeEnabled = false
                             )
                         }
 

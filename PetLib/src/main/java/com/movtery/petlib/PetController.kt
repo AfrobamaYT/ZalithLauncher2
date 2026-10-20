@@ -1,8 +1,9 @@
 package com.movtery.petlib
 
 import android.graphics.Bitmap
-import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Choreographer
@@ -68,6 +69,11 @@ class PetController(
     private var frameCallback: Choreographer.FrameCallback? = null
     private var bitmap: Bitmap? = null
     private var buffer: ByteBuffer? = null
+    // 位图以 SRC 模式整幅覆写画布，透明区域随位图零像素一并替换，
+    // 免去提交前对旧内容做全画布清屏的额外一遍操作
+    private val overwritePaint = Paint().apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
+    }
     private var surfaceFailures = 0
     private var lastRenderNanos = 0L
     private var lastSlowLogNanos = 0L
@@ -413,10 +419,7 @@ class PetController(
             PetLibNative.nativeRender(ptr, width, height, startedNanos / 1_000_000_000f, dt, output)
             output.rewind()
             target.copyPixelsFromBuffer(output)
-            // Surface 的软件画布在帧间保留旧内容，必须先清空，
-            // 否则透明区域（模型周围）会与上一帧叠加形成残影。
-            canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-            canvas.drawBitmap(target, 0f, 0f, null)
+            canvas.drawBitmap(target, 0f, 0f, overwritePaint)
             surface.unlockCanvasAndPost(canvas)
         } catch (_: IllegalArgumentException) {
             // surface 可能在锁画布与提交之间被视图销毁侧废弃，提交即抛；

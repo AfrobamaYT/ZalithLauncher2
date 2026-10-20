@@ -45,23 +45,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInParent
-import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
@@ -80,9 +77,6 @@ import com.movtery.cardgrid.state.rememberCardGridState
 import com.movtery.guide.GuideSide
 import com.movtery.guide.guideNode
 import com.movtery.petlib.PetAnimation
-import com.movtery.petlib.PetController
-import com.movtery.petlib.PetGazeRouter
-import com.movtery.petlib.PetPreview
 import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.game.account.Account
 import com.movtery.zalithlauncher.game.account.AccountsManager
@@ -95,8 +89,8 @@ import com.movtery.zalithlauncher.setting.enums.ActionMenuSide
 import com.movtery.zalithlauncher.ui.base.BaseScreen
 import com.movtery.zalithlauncher.ui.components.BackgroundCard
 import com.movtery.zalithlauncher.ui.components.MarqueeText
+import com.movtery.zalithlauncher.ui.components.PetModelView
 import com.movtery.zalithlauncher.ui.components.ScalingActionButton
-import com.movtery.zalithlauncher.ui.components.setSkinDefaultable
 import com.movtery.zalithlauncher.ui.guide.GuideKeys
 import com.movtery.zalithlauncher.ui.screens.NestedNavKey
 import com.movtery.zalithlauncher.ui.screens.NormalNavKey
@@ -561,7 +555,6 @@ private fun ActionMenuTallerContent(
     toVersionManageScreen: () -> Unit,
     toVersionSettingsScreen: () -> Unit,
 ) {
-    val context = LocalContext.current
     val refreshWardrobe by AccountsManager.refreshWardrobe.collectAsStateWithLifecycle()
 
     Column(
@@ -575,65 +568,32 @@ private fun ActionMenuTallerContent(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-        val defaultYaw = Math.toRadians(
+        // 偏航角符号与停泊侧相反，让模型面向屏幕内容一侧
+        val yaw = Math.toRadians(
             ((if (dockedSide == ActionMenuSide.START) 50.0 else -(50.0)) * (if (isRtl) -1 else 1))
         ).toFloat()
 
         val armModel = account?.skinModelType?.toArmModel()
-        val petController = remember {
-            val initialSkin = context.assets.open("steve.png").use { it.readBytes() }
-            PetController(
-                skin = initialSkin,
-                arm = null,
-                defaultYaw = defaultYaw
-            ).also { controller ->
-                controller.playAnimation(PetAnimation.Idle)
-            }
-        }
-        LaunchedEffect(petController, defaultYaw) {
-            petController.setModelYaw(defaultYaw)
-        }
-
-        val petRefreshKey = listOf(
-            account?.uniqueUUID,
-            refreshWardrobe,
-            account?.getSkinFile()?.lastModified(),
-            account?.getCapeFile()?.lastModified()
-        )
-        LaunchedEffect(petController, petRefreshKey) {
-            val skinBytes = account?.getSkinFile()?.takeIf { it.exists() }
+        val skinStamp = account?.getSkinFile()?.lastModified()
+        val capeStamp = account?.getCapeFile()?.lastModified()
+        val skinBytes by produceState<ByteArray?>(null, account, refreshWardrobe, skinStamp) {
+            value = account?.getSkinFile()?.takeIf { it.exists() }
                 ?.inputStream()?.use { it.readBytes() }
-            val capeBytes = account?.getCapeFile()?.takeIf { it.exists() }
+        }
+        val capeBytes by produceState<ByteArray?>(null, account, refreshWardrobe, capeStamp) {
+            value = account?.getCapeFile()?.takeIf { it.exists() }
                 ?.inputStream()?.use { it.readBytes() }
-            petController.setSkinDefaultable(context, skinBytes, armModel)
-            petController.setCape(capeBytes)
-        }
-        DisposableEffect(petController) {
-            onDispose { petController.close() }
-        }
-        // 全局鼠标注视：光标窗口坐标换算到预览视图坐标喂给控制器
-        var previewBounds by remember { mutableStateOf<Rect?>(null) }
-        DisposableEffect(petController) {
-            val gazeTarget = object : PetGazeRouter.Target {
-                override fun onCursor(x: Float, y: Float) {
-                    val bounds = previewBounds ?: return
-                    petController.setGaze(Pair(x - bounds.left, y - bounds.top))
-                }
-
-                override fun onGazeExpired() {
-                    petController.setGaze(null)
-                }
-            }
-            PetGazeRouter.register(gazeTarget)
-            onDispose { PetGazeRouter.unregister(gazeTarget) }
         }
 
-        PetPreview(
-            controller = petController,
+        PetModelView(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .onGloballyPositioned { previewBounds = it.boundsInWindow() },
+                .fillMaxWidth(),
+            skin = skinBytes,
+            cape = capeBytes,
+            arm = armModel,
+            yaw = yaw,
+            animation = PetAnimation.Idle,
             interactive = false
         )
 

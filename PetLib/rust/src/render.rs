@@ -215,8 +215,19 @@ impl Frame {
     }
 
     fn draw(&mut self, parts: &[BoxPart], skin: &Skin, cape: Option<&Texture>, light: &Lighting) {
-        self.pixels.fill(0);
-        self.depth.fill(f32::INFINITY);
+        // 只清上一帧写入过的矩形：每帧写入都落在当帧 bounds 内，
+        // 逐帧接力清除即覆盖全部历史写入，区域外像素从未被触碰、保持为零。
+        let left = self.bounds[0].clamp(0, self.width as i32) as usize;
+        let right = self.bounds[2].clamp(0, self.width as i32) as usize;
+        let top = self.bounds[1].clamp(0, self.height as i32) as usize;
+        let bottom = self.bounds[3].clamp(0, self.height as i32) as usize;
+        if left < right && top < bottom {
+            for y in top..bottom {
+                let row = y * self.width;
+                self.pixels[(row + left) * 4..(row + right) * 4].fill(0);
+                self.depth[row + left..row + right].fill(f32::INFINITY);
+            }
+        }
         self.bounds = [self.width as i32, self.height as i32, 0, 0];
         for part in parts {
             let tex = match part.tex {
@@ -429,37 +440,57 @@ impl Frame {
                 dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
             }
         } else if self.width > w && self.height > h {
-            if self.resample.as_ref().map(|r| r.source) != Some((self.width, self.height)) {
-                self.resample = Some(Resample {
-                    source: (self.width, self.height),
-                    columns: box_filter(self.width, w),
-                    rows: box_filter(self.height, h),
-                });
-            }
-            let resample = self.resample.as_ref().unwrap();
-            for (y, row) in resample.rows.iter().enumerate() {
-                for (x, col) in resample.columns.iter().enumerate() {
-                    let mut acc = [0u32; 4];
-                    let mut total = 0u32;
-                    for (dy, &wy) in row.factors.iter().enumerate() {
-                        let src = self.pixels[(row.start + dy) * self.width * 4 + col.start * 4..]
-                            .as_ptr();
-                        for (dx, &wx) in col.factors.iter().enumerate() {
-                            let weight = wx * wy;
-                            total += weight;
-                            let px = unsafe { src.add(dx * 4) };
-                            for ch in 0..4 {
-                                acc[ch] += unsafe { *px.add(ch) } as u32 * weight;
-                            }
+            if self.width == w * 2 && self.height == h * 2 {
+                // 精确 2×2 降采样：每个源像素权重恰为 256/256，与通用权重路径
+                // 等价，直接四像素求和免去逐权重乘加。
+                for y in 0..h {
+                    let src_row = (y * 2 * self.width) * 4;
+                    for x in 0..w {
+                        let l = x * 8;
+                        let out_off = (y * w + x) * 4;
+                        for (dst_ch, src_ch) in [(0usize, 2usize), (1, 1), (2, 0), (3, 3)] {
+                            let sum = u32::from(self.pixels[src_row + l + src_ch])
+                                + u32::from(self.pixels[src_row + l + 4 + src_ch])
+                                + u32::from(self.pixels[src_row + self.width * 4 + l + src_ch])
+                                + u32::from(self.pixels[src_row + self.width * 4 + l + 4 + src_ch]);
+                            out[out_off + dst_ch] = ((sum + 2) >> 2) as u8;
                         }
                     }
-                    let out_off = (y * w + x) * 4;
-                    out[out_off..out_off + 4].copy_from_slice(&[
-                        ((acc[2] + total / 2) / total) as u8,
-                        ((acc[1] + total / 2) / total) as u8,
-                        ((acc[0] + total / 2) / total) as u8,
-                        ((acc[3] + total / 2) / total) as u8,
-                    ]);
+                }
+            } else {
+                if self.resample.as_ref().map(|r| r.source) != Some((self.width, self.height)) {
+                    self.resample = Some(Resample {
+                        source: (self.width, self.height),
+                        columns: box_filter(self.width, w),
+                        rows: box_filter(self.height, h),
+                    });
+                }
+                let resample = self.resample.as_ref().unwrap();
+                for (y, row) in resample.rows.iter().enumerate() {
+                    for (x, col) in resample.columns.iter().enumerate() {
+                        let mut acc = [0u32; 4];
+                        let mut total = 0u32;
+                        for (dy, &wy) in row.factors.iter().enumerate() {
+                            let src = self.pixels
+                                [(row.start + dy) * self.width * 4 + col.start * 4..]
+                                .as_ptr();
+                            for (dx, &wx) in col.factors.iter().enumerate() {
+                                let weight = wx * wy;
+                                total += weight;
+                                let px = unsafe { src.add(dx * 4) };
+                                for ch in 0..4 {
+                                    acc[ch] += unsafe { *px.add(ch) } as u32 * weight;
+                                }
+                            }
+                        }
+                        let out_off = (y * w + x) * 4;
+                        out[out_off..out_off + 4].copy_from_slice(&[
+                            ((acc[2] + total / 2) / total) as u8,
+                            ((acc[1] + total / 2) / total) as u8,
+                            ((acc[0] + total / 2) / total) as u8,
+                            ((acc[3] + total / 2) / total) as u8,
+                        ]);
+                    }
                 }
             }
         } else {
@@ -521,6 +552,7 @@ struct Resample {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn box_filter_tiles_the_source_exactly_once() {
@@ -563,5 +595,66 @@ mod tests {
         assert_eq!(&out[0..4], &[255, 0, 0, 255]);
         assert_eq!(&out[4..8], &[255, 0, 0, 255]);
         assert_eq!(&out[8..12], &[128, 0, 0, 128]);
+    }
+
+    #[test]
+    fn downsample_exact_double_matches_weighted_reference() {
+        let mut frame = Frame::new(4, 4);
+        for (i, px) in frame.pixels.chunks_exact_mut(4).enumerate() {
+            px.copy_from_slice(&[
+                (i * 53 % 256) as u8,
+                (i * 97 % 256) as u8,
+                (i * 29 % 256) as u8,
+                (i * 11 % 255) as u8,
+            ]);
+        }
+        let mut out = vec![0u8; 2 * 2 * 4];
+        frame.present_into(&mut out, 2, 2);
+        // 参考值：按通用盒式滤波权重（每源像素 256/256）逐通道独立计算。
+        for y in 0..2 {
+            for x in 0..2 {
+                let mut expected = [0u8; 4];
+                for (dst_ch, src_ch) in [(0usize, 2usize), (1, 1), (2, 0), (3, 3)] {
+                    let mut acc = 0u32;
+                    for dy in 0..2 {
+                        for dx in 0..2 {
+                            let si = ((y * 2 + dy) * 4 + x * 2 + dx) * 4 + src_ch;
+                            acc += u32::from(frame.pixels[si]) * 65536;
+                        }
+                    }
+                    expected[dst_ch] = ((acc + 131072) / 262144) as u8;
+                }
+                let off = (y * 2 + x) * 4;
+                assert_eq!(&out[off..off + 4], &expected, "pixel ({x},{y})");
+            }
+        }
+    }
+
+    /// 矩形清屏的不变量：零写入的一帧必须不留任何上一帧痕迹。
+    #[test]
+    fn draw_clears_everything_left_by_the_previous_frame() {
+        let mut img = image::RgbaImage::new(64, 64);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([255, 0, 0, 255]);
+        }
+        let mut png = Vec::new();
+        img.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let skin = Skin::load(&png, None).unwrap();
+        let light = Lighting::new(&crate::api::LightingParams::default());
+
+        let mut frame = Frame::new(8, 8);
+        // 人为留下上一帧的写入痕迹与深度
+        for y in 1..3 {
+            for x in 2..5 {
+                let off = (y * 8 + x) * 4;
+                frame.pixels[off..off + 4].copy_from_slice(&[9, 9, 9, 255]);
+                frame.depth[y * 8 + x] = 1.;
+            }
+        }
+        frame.bounds = [2, 1, 5, 3];
+        frame.draw(&[], &skin, None, &light);
+        assert!(frame.pixels.iter().all(|&v| v == 0));
+        assert!(frame.depth.iter().all(|d| d.is_infinite()));
     }
 }
