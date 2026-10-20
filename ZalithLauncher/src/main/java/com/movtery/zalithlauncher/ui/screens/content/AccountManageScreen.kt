@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.nonInteractiveScrollbar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -77,7 +81,12 @@ import com.movtery.zalithlauncher.ui.components.SimpleAlertDialog
 import com.movtery.zalithlauncher.ui.components.SimpleEditDialog
 import com.movtery.zalithlauncher.ui.components.SimpleListDialog
 import com.movtery.zalithlauncher.ui.components.SimpleListItem
-import com.movtery.zalithlauncher.ui.components.SkinPreview3D
+import com.movtery.petlib.PetAnimation
+import com.movtery.petlib.PetController
+import com.movtery.petlib.PetGazeRouter
+import com.movtery.petlib.PetPreview
+import com.movtery.zalithlauncher.game.account.wardrobe.toArmModel
+import com.movtery.zalithlauncher.ui.components.setSkinDefaultable
 import com.movtery.zalithlauncher.ui.screens.NormalNavKey
 import com.movtery.zalithlauncher.ui.screens.content.elements.AccountItem
 import com.movtery.zalithlauncher.ui.screens.content.elements.AccountOperation
@@ -285,20 +294,54 @@ private fun ActionsLayout(
     ) {
         //玩家模型预览
         val refreshWardrobe by AccountsManager.refreshWardrobe.collectAsStateWithLifecycle()
-        val skinFile = remember(currentAccount, refreshWardrobe) {
-            currentAccount?.getSkinFile()?.takeIf { it.exists() }
+        val context = LocalContext.current
+        val armModel = currentAccount?.skinModelType?.toArmModel()
+
+        val petController = remember {
+            val initialSkin = context.assets.open("steve.png").use { it.readBytes() }
+            PetController(
+                skin = initialSkin,
+                arm = null,
+                defaultYaw = Math.toRadians(50.0).toFloat()
+            ).also { controller ->
+                controller.playAnimation(PetAnimation.Idle)
+            }
         }
-        val capeFile = remember(currentAccount, refreshWardrobe) {
-            currentAccount?.getCapeFile()?.takeIf { it.exists() }
+
+        val petRefreshKey = listOf(currentAccount?.uniqueUUID, refreshWardrobe, armModel)
+        LaunchedEffect(petController, petRefreshKey) {
+            val skinBytes = currentAccount?.getSkinFile()?.takeIf { it.exists() }
+                ?.inputStream()?.use { it.readBytes() }
+            val capeBytes = currentAccount?.getCapeFile()?.takeIf { it.exists() }
+                ?.inputStream()?.use { it.readBytes() }
+            petController.setSkinDefaultable(context, skinBytes, armModel)
+            petController.setCape(capeBytes)
         }
-        SkinPreview3D(
+        DisposableEffect(petController) {
+            onDispose { petController.close() }
+        }
+        // 全局鼠标注视：光标窗口坐标换算到预览视图坐标喂给控制器
+        var previewBounds by remember { mutableStateOf<Rect?>(null) }
+        DisposableEffect(petController) {
+            val gazeTarget = object : PetGazeRouter.Target {
+                override fun onCursor(x: Float, y: Float) {
+                    val bounds = previewBounds ?: return
+                    petController.setGaze(Pair(x - bounds.left, y - bounds.top))
+                }
+
+                override fun onGazeExpired() {
+                    petController.setGaze(null)
+                }
+            }
+            PetGazeRouter.register(gazeTarget)
+            onDispose { PetGazeRouter.unregister(gazeTarget) }
+        }
+        PetPreview(
+            controller = petController,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
-            skinFile = skinFile,
-            capeFile = capeFile,
-            modelType = currentAccount?.skinModelType,
-            refreshKey = listOf(currentAccount?.uniqueUUID, refreshWardrobe, skinFile?.lastModified() ?: 0L, capeFile?.lastModified() ?: 0L)
+                .fillMaxWidth()
+                .onGloballyPositioned { previewBounds = it.boundsInWindow() }
         )
 
         //添加账号
