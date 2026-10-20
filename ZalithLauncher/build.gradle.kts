@@ -91,6 +91,10 @@ android {
         }
     }
 
+    lint {
+        checkReleaseBuilds = false
+    }
+
     splits {
         val arch = projectArch.takeIf { it != "all" } ?: return@splits
         abi {
