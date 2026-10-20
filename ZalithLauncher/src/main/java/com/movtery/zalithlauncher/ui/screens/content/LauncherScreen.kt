@@ -594,7 +594,7 @@ private fun ActionMenuTallerContent(
             arm = armModel,
             yaw = yaw,
             animation = PetAnimation.Idle,
-            interactive = false
+            dragYaw = false
         )
 
         BackgroundCard(

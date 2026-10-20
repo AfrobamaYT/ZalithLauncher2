@@ -69,7 +69,8 @@ private fun Context.loadDefaultSkin(arm: ArmModel?): ByteArray = if (arm == ArmM
  * @param yaw 整体偏航角（弧度），参数变化时模型转向该角度
  * @param animation 循环动画，null 不播放
  * @param animationSpeed 动画播放速度倍率
- * @param interactive 是否响应拖拽旋转与点按压扁
+ * @param tapSquash 是否响应点按压扁
+ * @param dragYaw 是否响应拖拽旋转偏航
  * @param gazeEnabled 是否跟随 Activity 全局鼠标位置（窗口坐标）；
  * 独立窗口中的预览与事件泵不同坐标系，应传 false
  */
@@ -82,7 +83,8 @@ fun PetModelView(
     yaw: Float = 0f,
     animation: PetAnimation? = PetAnimation.Idle,
     animationSpeed: Float = 1f,
-    interactive: Boolean = true,
+    tapSquash: Boolean = true,
+    dragYaw: Boolean = true,
     gazeEnabled: Boolean = true,
 ) {
     val context = LocalContext.current
@@ -131,6 +133,7 @@ fun PetModelView(
     PetPreview(
         controller = petController,
         modifier = modifier.onGloballyPositioned { previewBounds = it.boundsInWindow() },
-        interactive = interactive
+        tapSquash = tapSquash,
+        dragYaw = dragYaw
     )
 }

@@ -41,44 +41,44 @@ import kotlin.math.PI
 /**
  * 玩家模型预览组件
  *
- * @param interactive 是否响应手势操作
+ * @param tapSquash 是否响应点按压扁
+ * @param dragYaw 是否响应拖拽旋转偏航
  */
 @Composable
 fun PetPreview(
     controller: PetController,
     modifier: Modifier = Modifier,
-    interactive: Boolean = true,
+    tapSquash: Boolean = true,
+    dragYaw: Boolean = true,
 ) {
-    val gestureModifier = if (interactive) {
-        Modifier
-            .pointerInput(controller) {
-                detectTapGestures(
-                    onPress = { offset ->
-                        if (size.width > 0 && size.height > 0) {
-                            controller.hitTest(
-                                offset.x / size.width,
-                                offset.y / size.height
-                            ) { hit ->
-                                if (hit) {
-                                    // 命中模型像素立刻播放压扁动画
-                                    controller.squashTap(System.nanoTime() / 1_000_000_000f)
-                                }
+    val gestureModifier = Modifier.let {
+        if (tapSquash) it.then(Modifier.pointerInput(controller) {
+            detectTapGestures(
+                onPress = { offset ->
+                    if (size.width > 0 && size.height > 0) {
+                        controller.hitTest(
+                            offset.x / size.width,
+                            offset.y / size.height
+                        ) { hit ->
+                            if (hit) {
+                                // 命中模型像素立刻播放压扁动画
+                                controller.squashTap(System.nanoTime() / 1_000_000_000f)
                             }
                         }
                     }
-                )
-            }
-            .pointerInput(controller) {
-                // 整宽水平拖拽对应一整圈偏航
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    if (size.width > 0) {
-                        controller.rotateYaw(dragAmount.x / size.width * 2f * PI.toFloat())
-                    }
+                }
+            )
+        }) else it
+    }.let {
+        if (dragYaw) it.then(Modifier.pointerInput(controller) {
+            // 整宽水平拖拽对应一整圈偏航
+            detectDragGestures { change, dragAmount ->
+                change.consume()
+                if (size.width > 0) {
+                    controller.rotateYaw(dragAmount.x / size.width * 2f * PI.toFloat())
                 }
             }
-    } else {
-        Modifier
+        }) else it
     }
 
     var textureView by remember { mutableStateOf<TextureView?>(null) }
