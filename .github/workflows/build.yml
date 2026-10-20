@@ -73,10 +73,12 @@ jobs:
       - name: Setup Android NDK
         run: |
           ndk=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
-          if [ -z "$ndk" ]; then
-            sdkmanager --install "ndk;27.0.12077973" > /dev/null
+          if [ -z "$ndk" ] || [ ! -f "$ndk/source.properties" ]; then
+            sdkmanager --install "ndk;27.0.12077973"
             ndk=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
           fi
+          echo "Using NDK at $ndk"
+          test -f "$ndk/source.properties"
           echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
 
       - name: Build APK for ${{ matrix.arch }}

@@ -72,8 +72,9 @@ val cargoBuild = tasks.register("cargoBuild") {
             val process = ProcessBuilder(listOf(command) + args)
                 .redirectErrorStream(true)
                 .start()
-                .apply { waitFor() }
-            process.inputStream.bufferedReader().readText().trim()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            if (process.exitValue() == 0) output.trim() else null
         } catch (_: java.io.IOException) {
             null
         }
@@ -105,11 +106,13 @@ val cargoBuild = tasks.register("cargoBuild") {
             listOf("build", "--release")
         val process = ProcessBuilder(command)
             .directory(project.file("rust"))
-            .inheritIO()
+            .redirectErrorStream(true)
             .start()
+        val output = process.inputStream.bufferedReader().readText()
         val exit = process.waitFor()
+        println(output)
         if (exit != 0) {
-            throw GradleException("cargo-ndk build failed with exit code $exit.")
+            throw GradleException("cargo-ndk build failed with exit code $exit.\n$output")
         }
     }
 }
