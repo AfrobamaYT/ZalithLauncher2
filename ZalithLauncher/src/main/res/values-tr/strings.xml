@@ -665,6 +665,7 @@
     <string name="about_sponsor">Sponsorluk Desteği</string>
     <string name="about_acknowledgements_title">Teşekkür ve Atıflar</string>
     <string name="about_acknowledgements_pojav_text">%s PojavLauncherdan başlatma backend kodu kullanır</string>
+    <string name="about_acknowledgements_modrinth_text">%s Modrinthdan oyuncu modeli animasyon ön ayarlarını aktarır</string>
     <string name="about_acknowledgements_pcl_text">%s uygulamasının bazı kısımlarına PCL2den atıfta bulunur</string>
     <string name="about_acknowledgements_fcl_text">%s FCLden kod barındırır ve uygulamasının bazı kısımlarına atıfta bulunur</string>
     <string name="about_acknowledgements_hmcl_text">%s HMCLden kod barındırır ve uygulamasının bazı kısımlarına atıfta bulunur</string>
