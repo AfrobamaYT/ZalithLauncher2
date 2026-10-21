@@ -355,6 +355,20 @@ pub extern "system" fn Java_com_movtery_petlib_PetLibNative_nativePlaySwing(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_movtery_petlib_PetLibNative_nativePlayInteract(
+    _env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+) {
+    guard(|| {
+        // SAFETY: 句柄由宿主渲染线程独占使用。
+        if let Some(model) = unsafe { model_from(ptr) } {
+            model.play_interact();
+        }
+    })
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_movtery_petlib_PetLibNative_nativeRender<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass,

@@ -133,6 +133,11 @@ impl PetModel {
         self.skeleton.squash_tap(now);
     }
 
+    /// 点击反应动画。
+    pub fn play_interact(&mut self) {
+        self.skeleton.play_interact();
+    }
+
     /// 攻击摆臂。
     pub fn play_swing(&mut self, now: f32) {
         self.skeleton.click(now);
@@ -349,5 +354,45 @@ mod tests {
         let (dx, dz) = (body.matrix[8], body.matrix[10]);
         assert!((dx - sin_f).abs() < 1e-4, "dx={dx}");
         assert!((dz - cos_f).abs() < 1e-4, "dz={dz}");
+    }
+
+    /// 静止姿态下各部件盒心必须保持原版布局。
+    #[test]
+    fn rest_parts_keep_vanilla_layout() {
+        let model = test_model();
+        let centers: Vec<(i32, i32, i32)> = model
+            .debug_part_transforms()
+            .iter()
+            .map(|p| {
+                (
+                    (p.matrix[12] * 10.).round() as i32,
+                    (p.matrix[13] * 10.).round() as i32,
+                    (p.matrix[14] * 10.).round() as i32,
+                )
+            })
+            .collect();
+        // 原版盒心经全局 front_yaw 偏航旋转后的期望位置
+        let (s, c) = (crate::pose::front_yaw().sin(), crate::pose::front_yaw().cos());
+        let world = |x: f32, y: f32, z: f32| {
+            (
+                ((x * c + z * s) * 10.).round() as i32,
+                (y * 10.).round() as i32,
+                ((-x * s + z * c) * 10.).round() as i32,
+            )
+        };
+        for (x, y, z) in [
+            (0., 18., 0.),    // 躯干
+            (0., 28., 0.),    // 头
+            (6., 18., 0.),    // 左臂
+            (-6., 18., 0.),   // 右臂
+            (1.9, 6., -0.1),  // 左腿
+            (-1.9, 6., -0.1), // 右腿
+        ] {
+            let want = world(x, y, z);
+            assert!(
+                centers.contains(&want),
+                "missing part near {want:?} (vanilla {x},{y},{z}); centers = {centers:?}"
+            );
+        }
     }
 }

@@ -2,6 +2,8 @@
 
 pub mod animation;
 pub mod api;
+mod clip;
+mod clip_data;
 pub mod lighting;
 pub mod pose;
 pub mod render;

@@ -77,6 +77,7 @@ import com.movtery.cardgrid.state.rememberCardGridState
 import com.movtery.guide.GuideSide
 import com.movtery.guide.guideNode
 import com.movtery.petlib.PetAnimation
+import com.movtery.petlib.PetTapReaction
 import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.game.account.Account
 import com.movtery.zalithlauncher.game.account.AccountsManager
@@ -594,6 +595,7 @@ private fun ActionMenuTallerContent(
             arm = armModel,
             yaw = yaw,
             animation = PetAnimation.Idle,
+            tapReaction = PetTapReaction.Interact,
             dragYaw = false
         )
 

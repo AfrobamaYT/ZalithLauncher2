@@ -48,8 +48,11 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
     let skin = scene.skin;
     let slim = skin.arm == ArmModel::Slim && !skin.legacy;
     let aw = if slim { 3. } else { 4. };
-    // 各部件互为兄弟节点：躯干方块的旋转与位置增量不带动臂/腿/披风。
-    // 枢轴与几何偏移以模型像素为单位。
+    // 躯干链是其余部件的父节点，位置增量与旋转以髋部（模型 12px）为枢轴带动头/臂/腿/披风。
+    // 各部件平移均为相对髋部的局部偏移，几何偏移以模型像素为单位。
+    let body_chain = Mat4::from_translation(Vec3::new(0., 12., 0.) + pose.body_pos)
+        * Mat4::from_quat(pose.body_rot)
+        * Mat4::from_rotation_y(pose.body_yaw);
     let mut v: Vec<BoxPart> = Vec::with_capacity(13);
     {
         let mut part =
@@ -57,7 +60,7 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
                 v.push(BoxPart {
                     size,
                     uv: Vec2::new(u, w),
-                    transform,
+                    transform: body_chain * transform,
                     inflate: 0.,
                     mirror,
                     tex: Tex::Skin,
@@ -66,18 +69,16 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
                     v.push(BoxPart {
                         size,
                         uv: outer,
-                        transform,
+                        transform: body_chain * transform,
                         inflate: if hat { 1. } else { 0.5 },
                         mirror,
                         tex: Tex::Skin,
                     });
                 }
             };
-        // 躯干：部件原点即盒心（skin 0,-6,0 → 模型 0,18,0），旋转绕盒心。
+        // 躯干：部件原点即盒心（skin 0,-6,0 → 模型 0,18,0），旋转绕髋部。
         part(
-            Mat4::from_translation(Vec3::new(0., 18., 0.) + pose.body_pos)
-                * Mat4::from_quat(pose.body_rot)
-                * Mat4::from_rotation_y(pose.body_yaw),
+            Mat4::from_translation(Vec3::Y * 6.),
             Vec3::new(8., 12., 4.),
             16.,
             16.,
@@ -85,9 +86,9 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
             false,
             false,
         );
-        // 头部：枢轴在颈部（模型 0,24,0），盒心上移 4。
+        // 头部：枢轴在颈部（髋部上方 12，模型 0,24,0），盒心上移 4。
         part(
-            Mat4::from_translation(Vec3::new(0., 24. + pose.head_pos, 0.))
+            Mat4::from_translation(Vec3::new(0., 12. + pose.head_pos, 0.))
                 * Mat4::from_quat(pose.head)
                 * Mat4::from_translation(Vec3::Y * 4.),
             Vec3::splat(8.),
@@ -100,10 +101,10 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
         for side in 0..2 {
             let left = side == 0;
             let sign = if left { 1. } else { -1. };
-            // 臂：部件原点 (∓5,22,0)（肩点，盒顶下方 2），枢轴组内偏移
+            // 臂：部件原点 (∓5,10,0)（肩点，模型 22px），枢轴组内偏移
             // (∓1,−4,0)（纤细 ∓0.5），盒心挂在枢轴上。
             let pivot_x = if slim { 0.5 } else { 1. };
-            let tr = Mat4::from_translation(Vec3::new(sign * 5., 22., 0.))
+            let tr = Mat4::from_translation(Vec3::new(sign * 5., 10., 0.))
                 * Mat4::from_quat(pose.arms[side])
                 * Mat4::from_translation(Vec3::new(sign * pivot_x, -4., 0.));
             let (u, w, outer) = if left && !skin.legacy {
@@ -124,8 +125,8 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
         for side in 0..2 {
             let left = side == 0;
             let sign = if left { 1. } else { -1. };
-            // 腿：部件原点 (∓1.9,12,−0.1)（髋点），枢轴组内偏移 (0,−6,0)。
-            let tr = Mat4::from_translation(Vec3::new(sign * 1.9, 12., -0.1))
+            // 腿：部件原点 (∓1.9,0,−0.1)（髋点，模型 12px），枢轴组内偏移 (0,−6,0)。
+            let tr = Mat4::from_translation(Vec3::new(sign * 1.9, 0., -0.1))
                 * Mat4::from_quat(pose.legs[side])
                 * Mat4::from_translation(Vec3::new(0., -6., 0.));
             let (u, w, outer) = if left && !skin.legacy {
@@ -144,12 +145,13 @@ pub(crate) fn parts(pose: &Skeleton, scene: &SceneParams) -> Vec<BoxPart> {
             );
         }
     }
-    // 披风：部件原点 (0,24,−2)，mesh 偏移 (0,−8,+0.5)；rotation.y 恒为 π
+    // 披风：部件原点 (0,12,−2)（模型 0,24,−2），mesh 偏移 (0,−8,+0.5)；rotation.y 恒为 π
     if scene.cape.is_some() {
         v.push(BoxPart {
             size: Vec3::new(10., 16., 1.),
             uv: Vec2::ZERO,
-            transform: Mat4::from_translation(Vec3::new(0., 24., -2.))
+            transform: body_chain
+                * Mat4::from_translation(Vec3::new(0., 12., -2.))
                 * Mat4::from_quat(pose::rotation(
                     pose.cape.x,
                     std::f32::consts::PI,

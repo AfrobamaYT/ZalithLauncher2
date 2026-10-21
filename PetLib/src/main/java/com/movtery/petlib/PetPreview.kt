@@ -38,21 +38,31 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlin.math.PI
 
+/** 点按模型命中时的反馈形式 */
+enum class PetTapReaction {
+    /** 无反馈 */
+    None,
+    /** 压扁脉冲 */
+    Squash,
+    /** 点击反应动画 */
+    Interact
+}
+
 /**
  * 玩家模型预览组件
  *
- * @param tapSquash 是否响应点按压扁
+ * @param tapReaction 点按模型命中时的反馈形式
  * @param dragYaw 是否响应拖拽旋转偏航
  */
 @Composable
 fun PetPreview(
     controller: PetController,
     modifier: Modifier = Modifier,
-    tapSquash: Boolean = true,
+    tapReaction: PetTapReaction = PetTapReaction.Squash,
     dragYaw: Boolean = true,
 ) {
     val gestureModifier = Modifier.let {
-        if (tapSquash) it.then(Modifier.pointerInput(controller) {
+        if (tapReaction != PetTapReaction.None) it.then(Modifier.pointerInput(controller, tapReaction) {
             detectTapGestures(
                 onPress = { offset ->
                     if (size.width > 0 && size.height > 0) {
@@ -61,8 +71,11 @@ fun PetPreview(
                             offset.y / size.height
                         ) { hit ->
                             if (hit) {
-                                // 命中模型像素立刻播放压扁动画
-                                controller.squashTap(System.nanoTime() / 1_000_000_000f)
+                                when (tapReaction) {
+                                    PetTapReaction.Squash -> controller.squashTap(System.nanoTime() / 1_000_000_000f)
+                                    PetTapReaction.Interact -> controller.playInteract()
+                                    PetTapReaction.None -> Unit
+                                }
                             }
                         }
                     }

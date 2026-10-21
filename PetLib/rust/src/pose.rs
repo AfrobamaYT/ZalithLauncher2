@@ -2,7 +2,9 @@
 
 use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
 
-use crate::animation::{evaluate, AnimFrame, AnimationId};
+use crate::animation::{evaluate_walking, AnimFrame, AnimationId};
+use crate::clip::{self, ClipPose, IdleClips};
+use crate::clip_data::CLIP_INTERACT;
 
 /// 攻击动画时长 (20 tick/s 下的 6 tick)
 const SWING_SECONDS: f32 = 0.30;
@@ -65,6 +67,32 @@ struct LimbSnapshot {
     cape: Vec2,
 }
 
+/// 把剪辑姿态折算成骨架关节目标
+fn snapshot_from_pose(pose: ClipPose) -> LimbSnapshot {
+    LimbSnapshot {
+        arms: pose.arms,
+        legs: pose.legs,
+        head_rot: pose.head_rot,
+        body_rot: pose.body_rot,
+        body_pos: pose.body_pos,
+        head_pos: 0.,
+        cape: pose.cape,
+    }
+}
+
+/// 把欧拉动画帧折算成骨架关节目标；披风 z 未写时保持 `current_cape_z`
+fn snapshot_from_frame(frame: AnimFrame, current_cape_z: f32) -> LimbSnapshot {
+    LimbSnapshot {
+        arms: frame.arms.map(|e| rotation(e.x, e.y, e.z)),
+        legs: frame.legs.map(|e| rotation(e.x, e.y, e.z)),
+        head_rot: rotation(frame.head_rot.x, frame.head_rot.y, frame.head_rot.z),
+        body_rot: rotation(frame.body_rot.x, frame.body_rot.y, frame.body_rot.z),
+        body_pos: frame.body_pos,
+        head_pos: frame.head_pos,
+        cape: Vec2::new(frame.cape_x, frame.cape_z.unwrap_or(current_cape_z)),
+    }
+}
+
 pub struct Skeleton {
     pub tau_gaze: f32,
     pub tau_yaw: f32,
@@ -82,6 +110,10 @@ pub struct Skeleton {
     progress: f32,
     blend_from: Option<LimbSnapshot>,
     blend: f32,
+    /// 待机剪辑调度（基础循环 + 随机子动画）
+    idle_clips: IdleClips,
+    /// 点击反应剪辑的已播时间，None 未播放
+    interact_t: Option<f32>,
 
     /// 平滑后的注视增量（弧度，水平 / 垂直）。
     gaze: Vec2,
@@ -131,6 +163,8 @@ impl Skeleton {
             progress: 0.,
             blend_from: None,
             blend: 1.,
+            idle_clips: IdleClips::new(),
+            interact_t: None,
             gaze: Vec2::ZERO,
             gaze_yaw_cut: false,
             gaze_twist_cut: false,
@@ -169,7 +203,9 @@ impl Skeleton {
     }
 
     pub fn head_follow(&self) -> bool {
-        self.animation.is_some_and(|(_, _, follow)| follow)
+        // 随机子动画期间头部交给剪辑演绎，不追光标
+        // 结束后视线状态已清零，按 τ_gaze 重新收敛回当前光标。
+        self.animation.is_some_and(|(_, _, follow)| follow) && !self.idle_clips.sub_active()
     }
 
     /// 播放动画。
@@ -178,6 +214,7 @@ impl Skeleton {
             self.start_blend();
         }
         self.progress = 0.;
+        self.idle_clips.reset();
         self.animation = Some((id, speed.max(0.01), head_follow));
     }
 
@@ -188,6 +225,16 @@ impl Skeleton {
         }
         self.animation = None;
         self.progress = 0.;
+        self.interact_t = None;
+        self.idle_clips.reset();
+    }
+
+    /// 播放点击反应动画，播放中重复调用时无效果。
+    pub fn play_interact(&mut self) {
+        if self.interact_t.is_none() {
+            self.interact_t = Some(0.);
+            self.start_blend();
+        }
     }
 
     fn start_blend(&mut self) {
@@ -236,36 +283,59 @@ impl Skeleton {
         a + (b - a) * t
     }
 
-    /// 逐帧推进。`view` 为输出视图尺寸（像素），注视目标坐标与之同空间。
+    /// 交互覆盖层结束后的当帧回归
+    fn base_targets(&mut self, dt: f32) -> LimbSnapshot {
+        match self.animation {
+            None => {
+                // resetJoints 语义：皮肤部件归位、cape.x 回默认仰角；
+                snapshot_from_frame(AnimFrame::rest_with_open_cape(), self.cape.y)
+            }
+            Some((AnimationId::Idle, speed, _)) => {
+                let tick = self.idle_clips.tick(dt, speed);
+                if tick.switched {
+                    self.start_blend();
+                }
+                snapshot_from_pose(clip::sample(tick.clip, tick.time))
+            }
+            Some((AnimationId::Walking, speed, _)) => {
+                let frame = evaluate_walking(self.progress);
+                self.progress += dt * speed;
+                snapshot_from_frame(frame, self.cape.y)
+            }
+        }
+    }
+
+    /// 当帧关节目标：点击反应覆盖层优先，其后是基础动画。
+    /// 剪辑源切换时在此启动交叉过渡。
+    fn current_targets(&mut self, dt: f32) -> LimbSnapshot {
+        if let Some(start) = self.interact_t {
+            let time = start + dt.min(0.05);
+            if time >= clip::INTERACT_DURATION {
+                self.interact_t = None;
+                self.idle_clips.rebase();
+                self.start_blend();
+                self.base_targets(dt)
+            } else {
+                self.interact_t = Some(time);
+                snapshot_from_pose(clip::sample(&CLIP_INTERACT, time))
+            }
+        } else {
+            self.base_targets(dt)
+        }
+    }
+
+    /// 逐帧推进。
+    /// `view` 为输出视图尺寸（像素），注视目标坐标与之同空间。
     pub fn update(&mut self, view: Vec2, now: f32, dt: f32) {
         // 负间隔非法：平滑系数与动画进度都不允许倒退。
         let dt = dt.max(0.);
-        // tick 时序：待机先推进内部时钟再求值；行走先求值再推进。
-        let frame = match self.animation {
-            None => {
-                // resetJoints 语义：皮肤部件归位、cape.x 回默认仰角；
-                let mut rest = AnimFrame::rest();
-                rest.cape_z = None;
-                rest
-            }
-            Some((AnimationId::Idle, speed, _)) => {
-                // 待机在缺帧时最多补 0.05s（NewIdle 的 maxDelta）。
-                self.progress += (dt * speed).min(0.05);
-                evaluate(AnimationId::Idle, self.progress)
-            }
-            Some((AnimationId::Walking, speed, _)) => {
-                let frame = evaluate(AnimationId::Walking, self.progress);
-                self.progress += dt * speed;
-                frame
-            }
-        };
+        let targets = self.current_targets(dt);
 
-        let arm_targets = frame.arms.map(|e| rotation(e.x, e.y, e.z));
-        let leg_targets = frame.legs.map(|e| rotation(e.x, e.y, e.z));
-        let head_target = rotation(frame.head_rot.x, frame.head_rot.y, frame.head_rot.z);
-        let body_target = rotation(frame.body_rot.x, frame.body_rot.y, frame.body_rot.z);
-        // 披风 z：动画不写时保持骨架当前值。
-        let cape_target = Vec2::new(frame.cape_x, frame.cape_z.unwrap_or(self.cape.y));
+        let arm_targets = targets.arms;
+        let leg_targets = targets.legs;
+        let head_target = targets.head_rot;
+        let body_target = targets.body_rot;
+        let cape_target = targets.cape;
 
         if let Some(from) = self.blend_from {
             self.blend += (1. - self.blend) * (1. - (-dt / self.tau_anim).exp());
@@ -280,16 +350,16 @@ impl Skeleton {
             }
             self.head_rot = from.head_rot.slerp(head_target, t);
             self.body_rot = from.body_rot.slerp(body_target, t);
-            self.body_pos = from.body_pos.lerp(frame.body_pos, t);
-            self.head_pos = Self::lerp_f(from.head_pos, frame.head_pos, t);
+            self.body_pos = from.body_pos.lerp(targets.body_pos, t);
+            self.head_pos = Self::lerp_f(from.head_pos, targets.head_pos, t);
             self.cape = from.cape.lerp(cape_target, t);
         } else {
             self.arms = arm_targets;
             self.legs = leg_targets;
             self.head_rot = head_target;
             self.body_rot = body_target;
-            self.body_pos = frame.body_pos;
-            self.head_pos = frame.head_pos;
+            self.body_pos = targets.body_pos;
+            self.head_pos = targets.head_pos;
             self.cape = cape_target;
         }
 
@@ -422,12 +492,46 @@ mod tests {
     }
 
     #[test]
+    fn random_sub_suspends_gaze_until_finished() {
+        let mut s = Skeleton::new();
+        let view = Vec2::new(450., 525.);
+        s.set_gaze_target(Some(Vec2::new(900., 100.)));
+        // 2 秒：注视收敛
+        for i in 0..120 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.gaze.length() > 0.01);
+        // 推进到子动画播放中（固定种子下 8 秒触发）
+        for i in 120..540 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.idle_clips.sub_active(), "sub must be playing at 9s");
+        // 子动画期间移动光标：头部只跟剪辑，不追光标
+        s.set_gaze_target(Some(Vec2::new(100., 400.)));
+        for i in 540..570 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.gaze.length() < 0.001, "gaze must be suspended during sub");
+        assert!(
+            s.head.abs_diff_eq(s.head_rot, 0.2),
+            "head must follow the clip during sub"
+        );
+        // 子动画播完（11 秒）：头部平滑转回新光标位置
+        for i in 570..800 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        assert!(!s.idle_clips.sub_active(), "sub must have finished by 13.3s");
+        assert!(s.gaze.length() > 0.01, "gaze must resume after sub");
+    }
+
+    #[test]
     fn gaze_follows_directly_within_twist_limit() {
         let mut s = Skeleton::new();
         let view = Vec2::new(450., 525.);
         // 需求角在自然范围内：直接跟随，注视收敛到需求角本身。
+        // 只跑 5 秒：8 秒起随机子动画会暂时接管头部。
         s.set_gaze_target(Some(Vec2::new(920., 262.5)));
-        for i in 0..600 {
+        for i in 0..300 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         let expected = s.solve_gaze(view);
@@ -445,7 +549,7 @@ mod tests {
         }
         assert!(s.gaze.length() < 0.001, "gaze = {:?}", s.gaze);
         assert!(
-            s.head.abs_diff_eq(s.head_rot, 0.1),
+            s.head.abs_diff_eq(s.head_rot, 0.2),
             "head must realign with body"
         );
     }
@@ -455,24 +559,26 @@ mod tests {
         let mut s = Skeleton::new();
         let view = Vec2::new(450., 525.);
         s.set_gaze_target(Some(Vec2::new(920., 262.5)));
-        for i in 0..600 {
+        // 全程压在 8 秒（首次随机子动画）之前：子动画会重置视线状态、
+        // 结束后按新鲜状态重新评估切断锁存。
+        for i in 0..90 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         let expected = s.solve_gaze(view);
         assert!((s.gaze.x - expected.x).abs() < 0.001);
         // 背对：切断跟随，头部回正。
         s.set_yaw_target(std::f32::consts::PI);
-        for i in 600..1200 {
+        for i in 90..180 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         assert!(s.gaze.length() < 0.001);
         assert!(
-            s.head.abs_diff_eq(s.head_rot, 0.1),
+            s.head.abs_diff_eq(s.head_rot, 0.2),
             "head must realign while back-facing"
         );
         // 拖回 82°（处于 75°~90° 迟滞区间）：保持切断。
         s.set_yaw_target(82f32.to_radians());
-        for i in 1200..1800 {
+        for i in 180..270 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         assert!(
@@ -481,7 +587,7 @@ mod tests {
         );
         // 回到正面：恢复跟随。
         s.set_yaw_target(0.);
-        for i in 1800..2400 {
+        for i in 270..420 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         let expected = s.solve_gaze(view);
@@ -491,18 +597,19 @@ mod tests {
     #[test]
     fn gaze_rules_mirror_for_rightward_turns() {
         // 上述规则的镜像：身体向右转、光标在屏幕左侧，判定量级必须一致。
+        // 全程压在 8 秒（首次随机子动画）之前。
         let mut s = Skeleton::new();
         let view = Vec2::new(450., 525.);
         // 需求角超夹角上限、未过扭：贴在负向夹角上限。
         s.set_gaze_target(Some(Vec2::new(-443., 262.5)));
-        for i in 0..600 {
+        for i in 0..90 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         let expected = s.solve_gaze(view);
         assert!((s.gaze.x - expected.x).abs() < 0.001);
         // 需求扭角远超自然范围：放弃。
         s.set_gaze_target(Some(Vec2::new(-4500., 262.5)));
-        for i in 600..1200 {
+        for i in 90..180 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         assert!(s.gaze.length() < 0.001, "gaze = {:?}", s.gaze);
@@ -510,13 +617,13 @@ mod tests {
         s.set_gaze_target(Some(Vec2::new(-443., 262.5)));
         // 背对（负方向）切断。
         s.set_yaw_target(-std::f32::consts::PI);
-        for i in 1200..1800 {
+        for i in 180..270 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         assert!(s.gaze.length() < 0.001);
         // 拖回 -82°（处于 -90°~-75° 迟滞区间）：保持切断。
         s.set_yaw_target(-82f32.to_radians());
-        for i in 1800..2400 {
+        for i in 270..360 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         assert!(
@@ -525,7 +632,7 @@ mod tests {
         );
         // 回到正面：恢复跟随，看向左侧光标。
         s.set_yaw_target(0.);
-        for i in 2400..3000 {
+        for i in 360..450 {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         let expected = s.solve_gaze(view);
@@ -552,11 +659,86 @@ mod tests {
             s.update(view, i as f32 / 60., 1. / 60.);
         }
         // 无输入时头部与身体朝向对齐（仅存动画摆动），不额外朝相机偏转。
+        // 子动画的头部摆动存在 τ_recenter 量级的追踪滞后，容差随之放宽。
         assert!(
-            s.head.abs_diff_eq(s.head_rot, 0.05),
+            s.head.abs_diff_eq(s.head_rot, 0.2),
             "head={:?} sway={:?}",
             s.head,
             s.head_rot
+        );
+    }
+
+    #[test]
+    fn interact_overrides_then_returns() {
+        let mut s = Skeleton::new();
+        let view = Vec2::new(450., 525.);
+        for i in 0..60 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        s.play_interact();
+        s.play_interact(); // 播放中重复调用无效
+        assert_eq!(s.interact_t, Some(0.));
+        s.update(view, 1.01, 1. / 60.);
+        assert!(s.interact_t.is_some(), "interact must be active");
+        // 0.5 秒后结束：回归基础动画并重新计时随机子动画
+        for i in 1..40 {
+            s.update(view, 1.01 + i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.interact_t.is_none(), "interact must end after 0.5s");
+        // 结束后重新计时（当帧起倒计时已扣除若干帧的推进量）
+        assert!(
+            s.idle_clips.countdown > clip::SUB_INTERVAL - 0.5,
+            "sub countdown must be re-armed after interact"
+        );
+    }
+
+    #[test]
+    fn play_animation_keeps_interact_until_finished() {
+        // interact 是 0.5 秒一次性覆盖层：切换基础动画不打断它，
+        // 播完后淡回到切换后的动画。停止动画则立即撤销覆盖层。
+        let mut s = Skeleton::new();
+        let view = Vec2::new(450., 525.);
+        for i in 0..60 {
+            s.update(view, i as f32 / 60., 1. / 60.);
+        }
+        s.play_interact();
+        s.play_animation(AnimationId::Walking, 1., true);
+        s.update(view, 1.01, 1. / 60.);
+        assert!(s.interact_t.is_some(), "switch must not cancel interact");
+        for i in 1..40 {
+            s.update(view, 1.01 + i as f32 / 60., 1. / 60.);
+        }
+        assert!(s.interact_t.is_none());
+
+        s.play_interact();
+        s.stop_animation();
+        assert!(s.interact_t.is_none(), "stop must cancel interact");
+    }
+
+    #[test]
+    fn long_run_stays_finite() {
+        // 10 虚拟分钟：注视持续输入、周期性 interact 与压扁，
+        // 全程不得出现非有限值或姿态发散。
+        let mut s = Skeleton::new();
+        let view = Vec2::new(450., 525.);
+        s.set_gaze_target(Some(Vec2::new(600., 200.)));
+        for i in 0..(60 * 60 * 10) {
+            if i % 900 == 300 {
+                s.play_interact();
+            }
+            if i % 1800 == 0 {
+                s.squash_tap(i as f32 / 60.);
+            }
+            s.update(view, i as f32 / 60., 1. / 60.);
+            assert!(s.head.is_finite());
+            assert!(s.body_pos.is_finite());
+            assert!(s.arms.iter().all(|q| q.is_finite()));
+            assert!(s.cape.is_finite());
+            assert!(s.squash.is_finite());
+        }
+        assert!(
+            (s.head.length() - 1.).abs() < 0.001,
+            "head must stay normalized"
         );
     }
 
@@ -571,7 +753,7 @@ mod tests {
         s.play_animation(AnimationId::Walking, 0.8, true);
         s.update(view, 1.01, 1. / 60.);
         // 切换瞬间不应直接跳到行走目标。
-        let f = evaluate(AnimationId::Walking, 0.08);
+        let f = evaluate_walking(0.08);
         let walking = rotation(f.arms[0].x, f.arms[0].y, f.arms[0].z);
         assert!(before.abs_diff_eq(s.arms[0], 0.4));
         assert!(!s.arms[0].abs_diff_eq(walking, 0.0001));

@@ -282,6 +282,13 @@ class PetController(
     }
 
     /**
+     * 播放点击反应动画，播放中重复调用时无效果
+     */
+    fun playInteract() {
+        post { PetLibNative.nativePlayInteract(ptr) }
+    }
+
+    /**
      * 归一化坐标命中测试，结果异步回到调用方的回调
      * @param x 横坐标（0..1）
      * @param y 纵坐标（0..1）

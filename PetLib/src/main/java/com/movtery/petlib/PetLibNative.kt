@@ -45,6 +45,7 @@ internal object PetLibNative {
     external fun nativeStopAnimation(ptr: Long)
     external fun nativeSquashTap(ptr: Long, now: Float)
     external fun nativePlaySwing(ptr: Long, now: Float)
+    external fun nativePlayInteract(ptr: Long)
     external fun nativeRender(ptr: Long, width: Int, height: Int, now: Float, dt: Float, buffer: ByteBuffer)
 
     external fun nativeHitTest(ptr: Long, x: Float, y: Float): Boolean
