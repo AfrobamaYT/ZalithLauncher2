@@ -211,7 +211,7 @@ open class MultiMCPack(
             }
 
             //创建版本信息
-            VersionConfig.createIsolation(targetClientDir).apply {
+            VersionConfig.createIsolationForModPack(targetClientDir).apply {
                 //Jvm启动参数
                 configuration?.jvmArgs?.let { this.jvmArgs = it }
                 //启动时自动加入服务器

@@ -179,7 +179,7 @@ class MCBBSPack(
             }
 
             //创建版本信息
-            VersionConfig.createIsolation(targetClientDir).apply {
+            VersionConfig.createIsolationForModPack(targetClientDir).apply {
                 //游戏参数
                 manifest.launchInfo.launchArguments?.joinToString(" ")?.let { arg ->
                     this.gameArgs = arg

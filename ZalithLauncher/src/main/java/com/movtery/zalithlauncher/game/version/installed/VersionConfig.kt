@@ -297,6 +297,28 @@ class VersionConfig(
             config.isolationType = SettingState.ENABLE
             return config
         }
+
+        /**
+         * 为整合包创建版本配置：如果整合包通过 overrides 预置了 ZalithLauncher/version.config，
+         * 则沿用其中的渲染器、驱动与图形 API 设置，其余设置保持默认
+         */
+        fun createIsolationForModPack(versionPath: File): VersionConfig {
+            val config = createIsolation(versionPath)
+            val presetFile = File(getZalithVersionPath(versionPath), "version.config")
+            if (!presetFile.isFile) return config
+
+            runCatching {
+                GSON.fromJson(presetFile.readText(), VersionConfig::class.java)
+            }.onSuccess { preset ->
+                config.renderer = preset.renderer
+                config.driver = preset.driver
+                config.graphicsApi = preset.graphicsApi
+                Logger.info(TAG, "Applied modpack preset: renderer=${config.renderer}, driver=${config.driver}, graphicsApi=${config.graphicsApi}")
+            }.onFailure { e ->
+                Logger.warning(TAG, "Failed to read the modpack preset version configuration.", e)
+            }
+            return config
+        }
     }
 }
 
