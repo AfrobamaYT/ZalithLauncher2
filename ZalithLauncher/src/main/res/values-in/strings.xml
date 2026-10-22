@@ -1134,8 +1134,6 @@
     <string name="settings_game_graphics_api_title">API Grafis</string>
     <string name="settings_game_graphics_api_summary">Atur API grafis yang digunakan oleh Minecraft 26.2+</string>
     <string name="settings_game_graphics_api_default">Ikuti pengaturan game</string>
-    <string name="settings_renderer_surface_title">Gunakan Rendering SurfaceView</string>
-    <string name="settings_renderer_surface_summary">Menggunakan layer terpisah di luar UI untuk rendering</string>
     <string name="plugin_download_title">Unduh Plugin</string>
     <string name="plugin_download_summary">Unduh plugin dan instal sebagai aplikasi. Cukup buka kembali launcher, dan plugin akan dimuat otomatis!</string>
     <string name="settings_game_graphics_api_default_opengl">Hanya atur ke OpenGL saat peluncuran pertama</string>

@@ -1140,8 +1140,6 @@
     <string name="servers_list_undefined">Не определено</string>
     <string name="servers_list_players_full">Заполнен</string>
     <string name="servers_list_add_server">Добавить сервер</string>
-    <string name="settings_renderer_surface_title">Использовать SurfaceView для рендеринга</string>
-    <string name="settings_renderer_surface_summary">Отрисовка происходит на отдельном слое за пределами UI</string>
     <string name="settings_game_native_lib_plugin_title">Нативные библиотеки</string>
     <string name="settings_game_native_lib_plugin_summary">Отображает все установленные нативные библиотеки. Вы можете включать или отключать их в списке.</string>
     <string name="settings_game_graphics_api_title">Графический API</string>
