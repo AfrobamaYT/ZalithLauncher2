@@ -627,6 +627,7 @@
     <string name="settings_launcher_mirror_official">De fontes oficiais</string>
     <string name="settings_launcher_mirror_mirror">Do espelho</string>
     <string name="about_acknowledgements_pojav_text">%s utiliza o backend do PojavLauncher</string>
+    <string name="about_acknowledgements_modrinth_text">%s porta as predefinições de animação do modelo de jogador do Modrinth</string>
     <string name="about_acknowledgements_bangbang93_text">%s utiliza a API BMCL da fonte mirror</string>
     <string name="about_acknowledgements_title">Agradecimentos</string>
     <string name="about_acknowledgements_pcl_text">%s retribui parte da implementação do PCL2</string>

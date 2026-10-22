@@ -729,6 +729,7 @@
     <string name="about_sponsor">Dukung Dengan Sponsor</string>
     <string name="about_acknowledgements_title">Ucapan Terima Kasih Kepada</string>
     <string name="about_acknowledgements_pojav_text">%s menggunakan backend peluncur dari PojavLauncher</string>
+    <string name="about_acknowledgements_modrinth_text">%s memport preset animasi model pemain dari Modrinth</string>
     <string name="about_acknowledgements_pcl_text">%s merujuk bagian implementasi dari PCL2</string>
     <string name="about_acknowledgements_fcl_text">%s menggabungkan kode dari FCL dan merujuk bagian implementasinya</string>
     <string name="about_acknowledgements_hmcl_text">%s menggabungkan kode dari HMCL dan merujuk bagian implementasinya</string>

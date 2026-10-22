@@ -243,6 +243,7 @@
     <string name="url_wiki_minecraft_game_snapshot">https://minecraft.wiki/w/Java_Edition_%s</string>
     <string name="url_wiki_minecraft_game_release">https://minecraft.wiki/w/Java_Edition_%s</string>
     <string name="about_acknowledgements_pojav_text">%s はPojavLauncherの起動バックエンドを使用しています</string>
+    <string name="about_acknowledgements_modrinth_text">%s はModrinthのプレイヤーモデルアニメーションプリセットを移植しています</string>
     <string name="about_acknowledgements_pcl_text">%s はPCL2のコードの一部を参照しています</string>
     <string name="settings_launcher_full_screen_title">全画面モード</string>
     <string name="settings_control_gesture_trigger_mouse_left">左クリック</string>

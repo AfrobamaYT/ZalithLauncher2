@@ -989,6 +989,7 @@
     <string name="control_manage_failed_to_save">컨트롤 레이아웃 저장 실패</string>
     <string name="control_editor_edit_style_config_delete">정말 컨트롤 외관 \'%s\'을(를) 삭제하시겠습니까?</string>
     <string name="about_acknowledgements_pojav_text">%s은(는) PojavLauncher의 실행 백엔드를 사용합니다</string>
+    <string name="about_acknowledgements_modrinth_text">%s은(는) Modrinth의 플레이어 모델 애니메이션 프리셋을 이식합니다</string>
     <string name="vibrate_kind_one_shot">상수</string>
 
     <string name="guide_main_welcome_title">%s에 오신 것을 환영합니다!</string>

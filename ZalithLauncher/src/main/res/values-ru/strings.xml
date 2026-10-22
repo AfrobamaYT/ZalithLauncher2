@@ -822,6 +822,7 @@
     <string name="about_sponsor">Спонсорская поддержка</string>
     <string name="about_acknowledgements_title">Благодарности</string>
     <string name="about_acknowledgements_pojav_text">%s использует бэкенд запуска из PojavLauncher</string>
+    <string name="about_acknowledgements_modrinth_text">%s портирует предустановки анимации модели игрока из Modrinth</string>
     <string name="about_acknowledgements_pcl_text">%s использует отдельные реализации из PCL2</string>
     <string name="about_acknowledgements_fcl_text">%s включает код из FCL и использует отдельные его реализации</string>
     <string name="about_acknowledgements_hmcl_text">%s включает код из HMCL и использует отдельные его реализации</string>

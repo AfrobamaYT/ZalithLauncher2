@@ -1011,6 +1011,7 @@
     <string name="about_sponsor">Apoio de patrocínio</string>
     <string name="about_acknowledgements_title">Agradecimentos</string>
     <string name="about_acknowledgements_pojav_text">%s usa o backend de inicialização do PojavLauncher</string>
+    <string name="about_acknowledgements_modrinth_text">%s porta as predefinições de animação do modelo de jogador do Modrinth</string>
     <string name="about_acknowledgements_pcl_text">%s referencia partes da implementação do PCL2</string>
     <string name="about_acknowledgements_fcl_text">%s incorpora código do FCL e faz referência a partes de sua implementação</string>
     <string name="about_acknowledgements_hmcl_text">%s incorpora código do HMCL e faz referência a partes de sua implementação</string>

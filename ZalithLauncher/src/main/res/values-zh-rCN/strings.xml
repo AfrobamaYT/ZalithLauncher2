@@ -1277,6 +1277,7 @@
     <string name="about_sponsor">赞助支持</string>
     <string name="about_acknowledgements_title">鸣谢</string>
     <string name="about_acknowledgements_pojav_text">%s 使用了 PojavLauncher 的启动后端</string>
+    <string name="about_acknowledgements_modrinth_text">%s 移植了 Modrinth 的玩家模型动画预设</string>
     <string name="about_acknowledgements_pcl_text">%s 参考了 PCL2 部分代码实现</string>
     <string name="about_acknowledgements_fcl_text">%s 引用了 FCL 部分代码，参考了部分代码实现</string>
     <string name="about_acknowledgements_hmcl_text">%s 引用了 HMCL 部分代码，参考了部分代码实现</string>
