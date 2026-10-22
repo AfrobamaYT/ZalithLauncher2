@@ -26,30 +26,32 @@ import com.movtery.zalithlauncher.game.download.assets.platform.modrinth.models.
 import com.movtery.zalithlauncher.utils.isChinese
 import com.movtery.zalithlauncher.utils.string.containsChinese
 import com.movtery.zalithlauncher.utils.string.tokenize
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import org.jackhuang.hmcl.addon.AddonProjectInfo
+import org.jackhuang.hmcl.addon.AddonProjectInfoRegistry
+
+/**
+ * 根据平台类别获取对应的 Addon 项目信息注册表，不支持的类别返回 `null`
+ */
+fun PlatformClasses.getTranslations(): AddonProjectInfoRegistry<*>? =
+    when (this) {
+        PlatformClasses.MOD -> AddonProjectInfoRegistry.MOD
+        PlatformClasses.MOD_PACK -> AddonProjectInfoRegistry.MODPACK
+        else -> null
+    }
 
 /**
  * 根据平台获取模组翻译信息
  */
 fun PlatformProject.getMcMod(
     classes: PlatformClasses
-): ModTranslations.McMod? {
-    val translations = classes.getTranslations()
+): AddonProjectInfo? {
+    val translations = classes.getTranslations() ?: return null
     return when (this) {
-        is ModrinthSingleProject -> translations.getModBySlugId(slug)
-        is CurseForgeProject -> translations.getModBySlugId(data.slug)
-        else -> error("Unknown project type: $this")
-    }
-}
-
-/**
- * 根据平台获取模组翻译信息
- */
-fun PlatformProject.getMcMod(
-    translations: ModTranslations
-): ModTranslations.McMod? {
-    return when (this) {
-        is ModrinthSingleProject -> translations.getModBySlugId(slug)
-        is CurseForgeProject -> translations.getModBySlugId(data.slug)
+        is ModrinthSingleProject -> translations.getInfoByCurseForgeId(slug)
+        is CurseForgeProject -> translations.getInfoByCurseForgeId(data.slug)
         else -> error("Unknown project type: $this")
     }
 }
@@ -57,8 +59,8 @@ fun PlatformProject.getMcMod(
 /**
  * 获取 mcmod 模组翻译标题，若当前环境非中文环境，则返回原始模组名称
  */
-fun ModTranslations.McMod?.getMcmodTitle(originTitle: String, context: Context? = null): String {
-    return this?.displayName?.takeIf { isChinese(context) } ?: originTitle
+fun AddonProjectInfo?.getMcmodTitle(originTitle: String, context: Context? = null): String {
+    return this?.displayName()?.takeIf { isChinese(context) } ?: originTitle
 }
 
 /**
@@ -73,7 +75,7 @@ suspend fun String.localizedModSearchKeywords(
     val englishSearchFiltersSet: MutableSet<String> = LinkedHashSet(16)
 
     for ((count, mod) in mcMods.withIndex()) {
-        val englishSearchFilter = tokenize(mod.subname.ifBlank { mod.name }).joinToString(" ")
+        val englishSearchFilter = tokenize(mod.subName().ifBlank { mod.mainName() }).joinToString(" ")
         if (englishSearchFilter.isNotBlank()) {
             englishSearchFiltersSet.add(englishSearchFilter)
         }
@@ -88,7 +90,11 @@ suspend fun String.localizedModSearchKeywords(
  */
 suspend fun String.searchMcMods(
     classes: PlatformClasses
-): List<ModTranslations.McMod>? {
+): List<AddonProjectInfo>? {
     if (!this.containsChinese()) return null
-    return classes.getTranslations().searchMod(this)
+    val translations = classes.getTranslations() ?: return null
+    return withContext(Dispatchers.Default) {
+        ensureActive()
+        translations.search(this@searchMcMods)
+    }
 }

@@ -272,6 +272,7 @@ dependencies {
     //Utils
     implementation(libs.bytehook)
     implementation(libs.gson)
+    implementation(libs.jetbrains.annotations)
     implementation(libs.commons.io)
     implementation(libs.commons.codec)
     implementation(libs.commons.compress)
