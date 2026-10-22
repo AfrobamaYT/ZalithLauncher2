@@ -1134,8 +1134,6 @@
     <string name="settings_game_graphics_api_title">APIs Gráficas:</string>
     <string name="settings_game_graphics_api_summary">Defina a API gráfica usada pelo Minecraft 26.2+</string>
     <string name="settings_game_graphics_api_default">Siga as configurações do jogo</string>
-    <string name="settings_renderer_surface_title">Usar renderização SurfaceView</string>
-    <string name="settings_renderer_surface_summary">Renderiza usando uma camada separada fora da interface do usuário</string>
     <string name="plugin_download_title">Baixar Plugin</string>
     <string name="plugin_download_summary">Baixe o plugin e instale-o como um aplicativo. Basta reabrir o launcher e ele será carregado automaticamente!</string>
     <string name="settings_game_graphics_api_default_opengl">Definido para OpenGL apenas na primeira inicialização</string>
